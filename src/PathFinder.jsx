@@ -33,6 +33,20 @@ async function loadData() {
 }
 
 const TERRAIN_KEYS = ["mode", "gain", "grade", "len", "cap"];
+
+// a saved query may name a station or window this data does not have
+// (demo ids vs real ones): fall back to Strasbourg / the first window
+const isHub = (s) => s.hub !== false;
+function fitQuery(q, db) {
+  const fix = {};
+  const o = db.byId[q.origin];
+  if (!o || !isHub(o)) {
+    const hubs = db.stations.filter(isHub);
+    fix.origin = (hubs.find((s) => /^strasbourg$/i.test(s.name)) || hubs[0])?.id;
+  }
+  if (!db.meta.windows.some((w) => w.id === q.window)) fix.window = db.meta.windows[0].id;
+  return Object.keys(fix).length ? { ...q, ...fix } : q;
+}
 const today = () => new Date().toISOString().slice(0, 10);
 const SHEET_PEEK = 238;
 
@@ -56,7 +70,8 @@ export default function PathFinder() {
   const pace = store.settings.pace || 6;
 
   useEffect(() => {
-    loadData().then((d) => setState({ status: "ready", ...d })).catch((e) => setState({ status: "error", error: e.message }));
+    loadData().then((d) => { setQ((prev) => fitQuery(prev, d.db)); setState({ status: "ready", ...d }); })
+      .catch((e) => setState({ status: "error", error: e.message }));
     probeBasemap().then(setBasemap);
   }, []);
   const layers = { ...DEFAULT_LAYERS, ...(store.settings.map || {}) };
@@ -111,7 +126,7 @@ export default function PathFinder() {
       <style>{themeCss(theme)}</style>
       <div className="dl-soft shrink-0 text-xs" style={{ paddingTop: "env(safe-area-inset-top)" }}>
         <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-1.5">
-          <span><b>Preview</b> · demo data · nothing is sent to GitHub</span>
+          <span><b>Preview</b> · {state.status !== "ready" || state.db.meta.demo ? "demo data" : `${state.db.meta.region} · data of ${state.db.meta.built}`} · nothing is sent to GitHub</span>
           <button onClick={() => setPage("how")} className="underline">What is real?</button>
         </div>
       </div>
@@ -424,7 +439,7 @@ function Chip({ on, onClick, children }) {
 
 function Funnel({ run, q, onMore }) {
   const t = run.trace;
-  const steps = [[t.stations, "stations"], [t.reach, `≤ ${q.maxTrain} min by train`], [t.nearStation, `climbs ≤ ${fmtKm(q.maxApproach)} away`], [t.matched, "match"]];
+  const steps = [[t.stations, "stations"], [t.reach, `≤ ${q.maxTrain} min by train`], [t.nearStation, `climbs ≤ ${fmtKm(q.maxApproach)} away`], [t.matched - (t.dupes || 0), "match"]];
   return (
     <button onClick={onMore} className="mt-6 flex w-full flex-wrap items-center gap-x-1.5 gap-y-1 text-left text-xs dl-faint">
       {steps.map(([n, l], k) => (
@@ -634,8 +649,9 @@ function Toggle({ label, sub, on, onChange }) {
 function OriginPicker({ db, q, onPick, onClose }) {
   const [text, setText] = useState("");
   const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-  const list = db.stations.filter((s) => norm(s.name).includes(norm(text)))
-    .sort((a, b) => (a.id === "stg" ? -1 : b.id === "stg" ? 1 : a.name.localeCompare(b.name, "fr")));
+  const first = (s) => s.id === "stg" || /^strasbourg$/i.test(s.name);
+  const list = db.stations.filter((s) => isHub(s) && norm(s.name).includes(norm(text)))
+    .sort((a, b) => (first(a) ? -1 : first(b) ? 1 : a.name.localeCompare(b.name, "fr")));
   return (
     <FullSheet title="Start from" onClose={onClose}>
       <div className="dl-float mt-2 flex h-14 items-center gap-3 rounded-full px-5">

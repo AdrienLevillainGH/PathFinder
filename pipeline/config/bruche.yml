@@ -1,0 +1,11 @@
+# Test region: Bruche valley, Mont Sainte-Odile, Champ du Feu, Donon.
+# Same rules as Alsace; smaller box for climbs; trains/coaches still
+# routed over the whole of Alsace (so Strasbourg works as a start).
+extends: alsace
+id: bruche
+name: Bruche valley (test)
+area:
+  bbox: [7.05, 48.33, 7.55, 48.62]
+  buffer_km: 1
+transit:
+  hubs: [Strasbourg, Molsheim, Schirmeck]

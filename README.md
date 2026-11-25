@@ -28,7 +28,7 @@ src/Segment.jsx      segment page: map, getting there, elevation, way types, sur
 src/theme.js         "Trail" theme + DayLoad themes, dl-* classes, grade colours
 src/storage.js       local only in the preview; DayLoad's sync code later
 src/geo.js           projection, GPX
-pipeline/            demo generator now; the R pipeline later
+pipeline/            R pipeline (OSM + IGN RGE ALTI + SNCF/Fluo GTFS + r5r) → public/data; see pipeline/README.md
 public/data/         meta, stations, ttm, climbs, access (the data contract)
 tests/               engine.test.mjs
 ```

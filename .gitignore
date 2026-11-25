@@ -1,4 +1,9 @@
 node_modules
 dist
 pipeline/data-raw
+pipeline/work
+pipeline/out
+.Rproj.user
+.Rhistory
+.RData
 .DS_Store

@@ -68,7 +68,7 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
         <div className="mx-auto max-w-2xl px-5 pt-5">
           <div className="flex flex-wrap items-center gap-2">
             <span className="dl-accent rounded-lg px-2 py-0.5 text-xs font-semibold">{difficulty(r.grade)}</span>
-            <span className="text-xs dl-faint">{down ? "Descent" : "Climb"} towards {c.towards} · demo climb, generated</span>
+            <span className="text-xs dl-faint">{down ? "Descent" : "Climb"} towards {c.towards}{db.meta.demo ? " · demo climb, generated" : ""}</span>
           </div>
           <h2 className="mt-2 text-[26px] font-semibold leading-tight" style={{ textWrap: "balance" }}>{c.name}</h2>
           {r.whole && <p className="mt-1 text-sm dl-muted">No stretch of this climb meets the current terrain filter, so the whole climb is shown.</p>}
@@ -99,7 +99,7 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
                 <Row icon={Footprints} main={`${fmtKm(r.approach)} to the start · ≈ ${fmtMin(r.approachMin)}`}
                   sub={`at ${fmtPace(pace)}${r.i > 0 ? ` · the last ${fmtKm(r.i * c.step)} are the lower part of this climb` : ""}`} />
                 <Row icon={Clock} main={`≈ ${fmtMin(r.total)} from ${origin.name} to the start`}
-                  sub={r.train[0] === 0 ? null : `last train back from ${station.name} ≈ ${fmtClock(r.train[3])}`} />
+                  sub={r.train[0] === 0 ? null : r.train[3] == null ? `no connection back from ${station.name} in the evening window` : `last connection back from ${station.name} ≈ ${fmtClock(r.train[3])}`} />
                 <a href="https://www.sncf-connect.com/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm underline dl-muted">
                   Check the real timetable on SNCF Connect <ArrowRight size={14} />
                 </a>

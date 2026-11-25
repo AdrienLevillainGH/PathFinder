@@ -190,7 +190,7 @@ export function runQuery(db, q, pace = 6) {
   }
 
   const trace = { stations: db.stations.length, reach: reach.size, climbs: db.climbs.length,
-                  nearStation: 0, matched: 0, near: 0, ms: 0 };
+                  nearStation: 0, matched: 0, dupes: 0, near: 0, ms: 0 };
   const results = [], near = [];
 
   for (const c of db.climbs) {
@@ -226,11 +226,50 @@ export function runQuery(db, q, pace = 6) {
     near.push({ ...describe(db, c, q, best, acc), why: whyAccess(q, acc), score: overT + overD });
   }
 
+  // climbs that share their upper part give the same stretch twice:
+  // keep the one you reach soonest, drop the copies
+  results.sort((a, b) => a.total - b.total);
+  const kept = dedupe(results);
+  trace.dupes = results.length - kept.length;
+  results.length = 0;
+  results.push(...kept);
   sortResults(results, q.sort);
   near.sort((a, b) => a.score - b.score);
+  const nearKept = dedupe(near, results.map(footprint));
+  near.length = 0;
+  near.push(...nearKept);
   trace.near = Math.min(near.length, 8);
   trace.ms = typeof performance !== "undefined" ? performance.now() - t0 : 0;
   return { results, near: near.slice(0, 8), reach, trace };
+}
+
+// the ground a stretch covers, as ~45 m cells
+export function footprint(r) {
+  const c = r.climb.coords, n = c.length;
+  const cells = new Set();
+  for (let k = r.i; k <= r.j; k++) {
+    const [lon, lat] = r.dir === "down" ? c[n - 1 - k] : c[k];
+    cells.add(`${Math.floor(lon / 0.0006)},${Math.floor(lat / 0.0004)}`);
+  }
+  return cells;
+}
+
+// two stretches are the same if half the smaller one is on the other
+export function overlap(a, b) {
+  let shared = 0;
+  for (const x of a) if (b.has(x)) shared++;
+  return shared / Math.max(1, Math.min(a.size, b.size));
+}
+
+export function dedupe(list, taken = []) {
+  const keep = [], prints = [...taken];
+  for (const r of list) {
+    const f = footprint(r);
+    if (prints.some((g) => overlap(f, g) >= 0.5)) continue;
+    keep.push(r);
+    prints.push(f);
+  }
+  return keep;
 }
 
 // the station that gets you to this stretch soonest, train + approach

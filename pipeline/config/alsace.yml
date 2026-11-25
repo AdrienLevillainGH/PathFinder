@@ -1,0 +1,95 @@
+# ------------------------------------------------------------------
+# Region pack: Alsace. Another region = another file like this one
+# (Annecy, Marseille, Boulder…); the R code does not change.
+# ------------------------------------------------------------------
+id: alsace
+name: Alsace
+crs: 2154                          # metric CRS for all geometry (Lambert-93)
+timezone: Europe/Paris
+
+# where climbs are searched (lon/lat box, then a buffer in km)
+area:
+  bbox: [6.80, 47.40, 8.25, 49.10]
+  buffer_km: 2
+
+osm:
+  # Geofabrik extracts read together; ways crossing the border are in
+  # both and are kept once. Lorraine is needed for the Vosges crest.
+  extracts: [europe/france/alsace, europe/france/lorraine]
+  r5r_extract: europe/france/alsace   # street network r5r walks on (one file)
+
+network:
+  trail_highways: [path, footway, bridleway, steps, track]
+  minor_roads: [unclassified, residential, service, living_street, pedestrian, cycleway, tertiary]
+  walk_only: [secondary, secondary_link, tertiary_link, primary, primary_link]
+  mountain_sac: [mountain_hiking, demanding_mountain_hiking, alpine_hiking, demanding_alpine_hiking, difficult_alpine_hiking]
+  bad_visibility: [bad, horrible, no]
+
+dem:
+  source: ign_wms                  # ign_wms (automatic) | folder (RGE ALTI tiles you downloaded)
+  layer: ELEVATION.ELEVATIONGRIDCOVERAGE.HIGHRES
+  fine_res_m: 5                    # RGE ALTI 5 m
+  coarse_res_m: 25                 # whole area, to find where relief is
+  tile_km: 10                      # 2000 × 2000 px per request at 5 m
+  coarse_tile_km: 50
+  relief_min_m: 40                 # flatter tiles keep the 25 m model
+  folder: null                     # source: folder → .asc/.tif tiles in EPSG:2154
+
+climbs:
+  densify_m: 10                    # elevation sampled every 10 m along every way
+  edge_smooth_m: 30                # light smoothing to find bumps inside a way
+  split_bump_m: 8                  # a way is cut at a high/low point of ≥ 8 m
+  flat_tol_m: 4                    # a "climb" may lose up to 4 m between two junctions
+  smooth_m: 60                     # climb profiles: moving average, applied twice
+  step_m: 20                       # profile step in the app (meta.profile_step_m)
+  min_gain_m: 60
+  min_len_m: 200
+  max_len_m: 8000
+  trim_tol_m: 8                    # flat run-up at the bottom is cut off
+  road_penalty: 0.6                # roads count 1.6 × their length when choosing a line
+  max_road_share: 0.6
+  per_sector: 3                    # candidates per top, per compass sector
+  max_overlap: 0.6                 # a climb sharing > 60 % with a better one is dropped
+  passes: 2                        # 2nd pass: alternatives to the most direct lines
+  reuse_penalty: 3                 # …in which edges already used count 4 × their length
+  name_radius_m: 600
+  tile_km: 5
+
+transit:
+  # same box as the climbs unless a smaller region overrides `area` only
+  area:
+    bbox: [6.80, 47.40, 8.25, 49.10]
+    buffer_km: 5
+  feeds:
+    - id: sncf
+      label: SNCF (TER Grand Est)
+      url: https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip
+      page: https://transport.data.gouv.fr/datasets/horaires-sncf
+      exclude: "TGV|OUIGO|Lyria"   # regex on route names and stop ids: no high-speed trains
+    - id: fluo
+      label: Fluo Grand Est (regional coaches)
+      url: https://transport.data.gouv.fr/resources/83635/download
+      page: https://transport.data.gouv.fr/datasets/offre-du-reseau-de-transport-interurbain-fluo-grand-est
+      exclude: null
+  max_age_days: 7                  # re-download timetables older than this
+  stop_merge_m: 150                # stop points closer than this become one place
+  hubs: [Strasbourg, Molsheim, Obernai, Sélestat, Colmar, Mulhouse, Saverne, Haguenau, Wissembourg, Saint-Louis]
+  # departure windows. weekday + from: "next" (the next one after today)
+  # or "MM-DD" (first such weekday on/after that date, next time it comes)
+  # or a fixed date: "2027-07-10". Lines that only run in summer show up
+  # in the summer windows; feeds that do not reach a date borrow the same
+  # weekday from their last published weeks (logged in meta.json).
+  scenarios:
+    - {id: sat, label: Saturday, weekday: saturday, from: next, out: ["06:30", "10:30"], back: ["14:00", "23:30"]}
+    - {id: sun, label: Sunday, weekday: sunday, from: next, out: ["07:00", "11:00"], back: ["14:00", "23:00"]}
+    - {id: wd, label: Weekday, weekday: wednesday, from: next, out: ["06:30", "10:30"], back: ["15:00", "23:30"]}
+    - {id: sat_summer, label: Summer Saturday, weekday: saturday, from: "07-05", out: ["06:30", "10:30"], back: ["14:00", "23:30"]}
+    - {id: sun_summer, label: Summer Sunday, weekday: sunday, from: "07-05", out: ["07:00", "11:00"], back: ["14:00", "23:00"]}
+  max_trip_min: 150
+  max_walk_min: 20                 # r5r: walking at either end of a ride
+  walk_speed_kmh: 4.5
+  java_memory: 8G
+
+access:
+  max_walk_m: 8000                 # stop → bottom or top of a climb, along paths and roads
+  max_snap_m: 400

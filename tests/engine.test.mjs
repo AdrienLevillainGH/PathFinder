@@ -1,6 +1,6 @@
 // Engine checks: run with `npm test`. Brute force is the referee.
 import { readFileSync } from "node:fs";
-import { prepare, runQuery, searchClimb, implied, DEFAULT_QUERY, PRESETS } from "../src/engine.js";
+import { prepare, runQuery, searchClimb, implied, DEFAULT_QUERY, PRESETS, footprint, overlap } from "../src/engine.js";
 
 const load = (f) => JSON.parse(readFileSync(new URL(`../public/data/${f}`, import.meta.url)));
 const db = prepare({ meta: load("meta.json"), stations: load("stations.json"), ttm: load("ttm.json"),
@@ -85,6 +85,9 @@ for (const p of PRESETS) for (const w of ["wd", "sat", "sun"]) for (const dir of
     check(Math.abs(wsum - r.len) < 1e-6, `${tag}: way types add up to the length`);
   }
   for (const r of near) check(r.why && r.why.length > 0, `${p.id} near ${r.id} has a reason`);
+  const prints = results.map(footprint);
+  for (let a = 0; a < prints.length; a++) for (let b = a + 1; b < prints.length; b++)
+    check(overlap(prints[a], prints[b]) < 0.5, `${p.id}/${w}/${dir}: ${results[a].id} and ${results[b].id} are the same stretch`);
   if (dir === "up" && w === "sat") console.log(`${p.label.padEnd(30)} ${String(results.length).padStart(3)} results  ${near.length} near misses`);
 }
 
