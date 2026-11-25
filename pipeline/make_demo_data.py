@@ -17,7 +17,8 @@ from pathlib import Path
 import heapq
 
 random.seed(7)
-OUT = Path(__file__).resolve().parent.parent / "public" / "data"
+# the demo world now lives with the tests; the app reads real data (pipeline/)
+OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "demo"
 OUT.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------- stations

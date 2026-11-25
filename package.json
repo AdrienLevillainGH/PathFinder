@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "data": "python3 pipeline/make_demo_data.py",
-    "test": "node tests/engine.test.mjs"
+    "test": "node tests/engine.test.mjs && node pipeline/tests/check_export.mjs public/data"
   },
   "dependencies": {
     "lucide-react": "0.383.0",

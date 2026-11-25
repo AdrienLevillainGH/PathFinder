@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { prepare, runQuery, searchClimb, implied, DEFAULT_QUERY, PRESETS, footprint, overlap } from "../src/engine.js";
 
-const load = (f) => JSON.parse(readFileSync(new URL(`../public/data/${f}`, import.meta.url)));
+const load = (f) => JSON.parse(readFileSync(new URL(`./fixtures/demo/${f}`, import.meta.url)));
 const db = prepare({ meta: load("meta.json"), stations: load("stations.json"), ttm: load("ttm.json"),
                      climbs: load("climbs.json"), access: load("access.json") });
 
