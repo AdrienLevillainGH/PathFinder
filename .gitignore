@@ -7,3 +7,5 @@ pipeline/out
 .Rhistory
 .RData
 .DS_Store
+.Rprofile
+rjavaenv/

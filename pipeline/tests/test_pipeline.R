@@ -45,6 +45,14 @@ fake2 <- dplyr::mutate(fake, routes = "BUS1|TER1")
 ok(trip_summary(norm_expanded(fake2))$changes == 1, "trip_summary: one change")
 lb <- last_departure(norm_expanded(dplyr::filter(fake, !is.na(total_time))))
 ok(lb$last == 9 * 60 + 10, "last departure")
+# r5r's walk-only journeys: ignored when long, "any time" when short
+walk_long <- dplyr::bind_rows(fake, tibble::tibble(from_id = "h", to_id = "p", departure_time = "10:15:00", draw_number = 1, routes = "[WALK]", total_time = 72))
+ok(trip_summary(norm_expanded(walk_long))$trips == 2 && trip_summary(norm_expanded(walk_long))$p50 == 22, "a 72-minute walk is not a trip")
+ok(last_departure(norm_expanded(dplyr::filter(walk_long, !is.na(total_time))))$last == 9 * 60 + 10, "nor a way back")
+walk_short <- tibble::tibble(from_id = "h", to_id = "q", departure_time = sprintf("07:%02d:00", 0:30), draw_number = 1, routes = "[WALK]", total_time = 12)
+ws <- trip_summary(norm_expanded(walk_short))
+ok(ws$trips == 99 && ws$p50 == 12, "a 12-minute walk: on foot, any time")
+ok(last_departure(norm_expanded(walk_short), 20, 23 * 60 + 30)$last == 23 * 60 + 30, "…and back any time")
 
 # ---------------------------------------------------------------- world
 message("world")
@@ -58,7 +66,7 @@ for (p in cfg$paths) dir.create(p, recursive = TRUE, showWarnings = FALSE)
 # ---------------------------------------------------------------- osm
 message("osm")
 osm <- osm_read(cfg, W$osm)
-ok(nrow(osm$lines) == 7 + 22 + 2, "all 31 ways read")
+ok(nrow(osm$lines) == 7 + 22 + 3, "all 32 ways read")
 ok(all(c("Mont Test", "Rocher B", "Testheim", "Tour test") %in% osm$features$name) &&
      osm$features$kind[osm$features$name == "Tour test"] == "tower", "summits, tower and village read")
 ok(NROW(osm$routes) == 1, "hiking route read")
@@ -161,6 +169,30 @@ ok(length(js[[3]]$order) == length(js[[2]]$stations), "ttm order = stations")
 ok(all(names(js[[5]]) %in% prof$id), "access keys are climb ids")
 files <- diagnostics(cfg, net2, prof, acc, tp, fake_ttm)
 ok(all(file.exists(files)), "diagnostic charts written")
+# ---------------------------------------------------------------- routing (r5r)
+# only where r5r, Java 21 and osmium (to turn the .osm into a .pbf) are installed
+if (requireNamespace("r5r", quietly = TRUE) && isTRUE(java_major() >= 21) && nzchar(Sys.which("osmium"))) {
+  message("routing (r5r)")
+  pbf <- file.path(root, "world.osm.pbf")
+  system2("osmium", c("cat", W$osm, "-o", pbf, "--overwrite"))
+  tp2 <- tp
+  tp2$scen <- dplyr::filter(tp$scen, id %in% c("sat", "sat_summer"))
+  tt <- transit_times(cfg, tp2, unique(c(acc$place, tp$hubs$id, tp$places$id)), pbf = pbf)
+  print(tt)
+  sat <- tt$sat; summer <- tt$sat_summer
+  v <- dplyr::filter(sat, place == "r87000002")
+  ok(nrow(v) == 1 && v$trips == 2 && v$p50 >= 12 && v$p50 <= 20 && v$changes == 0,
+     sprintf("Saturday Hubville -> Val: 2 trains, %s min (12 on board + a few on foot), direct", v$p50))
+  ok(v$last_back >= 19 * 60 + 30 && v$last_back <= 19 * 60 + 42,
+     sprintf("leave Val by %02d:%02d for the last train (19:42), not the 72-min walk", v$last_back %/% 60, v$last_back %% 60))
+  col_sat <- dplyr::filter(sat, place == tp$places$id[tp$places$name == "Col du Test"])
+  col_sum <- dplyr::filter(summer, place == tp$places$id[tp$places$name == "Col du Test"])
+  ok(nrow(col_sat) == 0, "November Saturday: no coach to Col du Test")
+  ok(nrow(col_sum) == 1 && col_sum$changes == 1 && col_sum$trips == 1,
+     sprintf("July Saturday: train + summer coach to Col du Test (%s min, %d change)", col_sum$p50, col_sum$changes))
+  ok(nrow(dplyr::filter(summer, place == "r87000002")) == 1, "July Saturday: borrowed train days are routed")
+}
+
 if (nzchar(Sys.which("node"))) {
   message("app engine")
   status <- system2("node", c(here::here("pipeline", "tests", "check_export.mjs"), out))

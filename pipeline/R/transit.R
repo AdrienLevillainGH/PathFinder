@@ -48,34 +48,53 @@ norm_expanded <- function(x) {
 # you there at m + total; the same arrival from several minutes is one
 # trip, caught by leaving at the last of those minutes: its duration is
 # arrival - that minute (no waiting at the start).
-trip_summary <- function(e) {
-  e |>
+# r5r also returns walk-only journeys (any length up to max_trip_duration,
+# whatever max_walk_time says): they count only when no train or coach
+# does it and the walk is short (<= max_walk minutes): then trips = 99.
+trip_summary <- function(e, max_walk = 20) {
+  g <- e |>
     dplyr::mutate(arr = dep + total) |>
     dplyr::group_by(from, to, arr) |>
     dplyr::summarise(dep = max(dep), routes = routes[which.max(dep)], .groups = "drop") |>
     dplyr::mutate(dur = arr - dep,
                   walk = is.na(routes) | routes == "" | grepl("WALK", routes, fixed = TRUE),
-                  changes = dplyr::if_else(walk, 0L, lengths(strsplit(routes, "|", fixed = TRUE)) - 1L)) |>
+                  changes = dplyr::if_else(walk, 0L, lengths(strsplit(routes, "|", fixed = TRUE)) - 1L))
+  ride <- g |>
+    dplyr::filter(!walk) |>
     dplyr::group_by(from, to) |>
     dplyr::summarise(p50 = round(stats::median(dur)), p75 = round(stats::quantile(dur, 0.75, names = FALSE)),
-                     trips = dplyr::if_else(all(walk), 99L, sum(!walk)),
-                     changes = as.integer(round(stats::median(changes))), best = min(dur), .groups = "drop")
+                     trips = dplyr::n(), changes = as.integer(round(stats::median(changes))), best = min(dur), .groups = "drop")
+  on_foot <- g |>
+    dplyr::filter(walk, dur <= max_walk) |>
+    dplyr::anti_join(ride, by = c("from", "to")) |>
+    dplyr::group_by(from, to) |>
+    dplyr::summarise(p50 = round(min(dur)), p75 = round(min(dur)), trips = 99L, changes = 0L, best = min(dur), .groups = "drop")
+  dplyr::bind_rows(ride, on_foot)
 }
 
-# the last minute you can leave and still get there
-last_departure <- function(e) {
-  e |>
+# the last minute you can leave and still get back by train or coach
+# (a short walk counts as "any time": the end of the window)
+last_departure <- function(e, max_walk = 20, window_end = 24L * 60L) {
+  e <- dplyr::mutate(e, walk = is.na(routes) | routes == "" | grepl("WALK", routes, fixed = TRUE))
+  ride <- e |>
+    dplyr::filter(!walk) |>
     dplyr::group_by(from, to) |>
     dplyr::summarise(last = max(dep), .groups = "drop")
+  on_foot <- e |>
+    dplyr::filter(walk, total <= max_walk) |>
+    dplyr::distinct(from, to) |>
+    dplyr::anti_join(ride, by = c("from", "to")) |>
+    dplyr::mutate(last = as.integer(window_end))
+  dplyr::bind_rows(ride, on_foot)
 }
 
-r5r_core <- function(cfg, tp) {
+r5r_core <- function(cfg, tp, pbf = NULL) {
   if (!requireNamespace("r5r", quietly = TRUE))
     stop("r5r is not installed: install.packages('r5r'), and Java 21 (see pipeline/README.md)", call. = FALSE)
   dir <- work_file(cfg, "r5")
   dir.create(dir, showWarnings = FALSE)
   unlink(list.files(dir, pattern = "\\.(zip|pbf)$", full.names = TRUE))
-  pbf <- osm_files(cfg, cfg$osm$r5r_extract)
+  if (is.null(pbf)) pbf <- osm_files(cfg, cfg$osm$r5r_extract)
   file.copy(pbf, file.path(dir, basename(pbf)), overwrite = TRUE)
   for (f in tp$feeds) gtfs_write(f$g, file.path(dir, paste0(f$id, ".zip")))
   say("r5r: building the network (a few minutes the first time)")
@@ -83,7 +102,7 @@ r5r_core <- function(cfg, tp) {
   if ("build_network" %in% ns) r5r::build_network(dir, verbose = FALSE, overwrite = TRUE) else r5r::setup_r5(dir, verbose = FALSE, overwrite = TRUE)
 }
 
-transit_times <- function(cfg, tp, places_near) {
+transit_times <- function(cfg, tp, places_near, pbf = NULL) {
   options(java.parameters = paste0("-Xmx", cfg$transit$java_memory %||% "8G"))
   tr <- cfg$transit
   hubs <- dplyr::transmute(tp$hubs, id, lat, lon)
@@ -93,21 +112,21 @@ transit_times <- function(cfg, tp, places_near) {
   for (k in seq_len(nrow(tp$scen))) {
     s <- tp$scen[k, ]
     out[[s$id]] <- cached(work_file(cfg, sprintf("ttm_%s_%s.rds", s$id, s$date)), {
-      if (is.null(core)) core <- r5r_core(cfg, tp)
+      if (is.null(core)) core <- r5r_core(cfg, tp, pbf)
       at <- function(m) as.POSIXct(sprintf("%s %02d:%02d:00", s$date, m %/% 60, m %% 60), tz = cfg$timezone)
       say("%s %s: %d hubs \u2192 %d places", s$id, s$date, nrow(hubs), nrow(dest))
       fw <- r5r::expanded_travel_time_matrix(core, origins = hubs, destinations = dest, mode = c("WALK", "TRANSIT"),
                                              departure_datetime = at(s$out_start), time_window = s$out_end - s$out_start,
                                              max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
                                              walk_speed = tr$walk_speed_kmh, progress = FALSE) |>
-        norm_expanded() |> trip_summary()
+        norm_expanded() |> trip_summary(tr$max_walk_min)
       chunks <- split(dest, ceiling(seq_len(nrow(dest)) / 200))
       bk <- purrr::map(chunks, function(ch)
         r5r::expanded_travel_time_matrix(core, origins = ch, destinations = hubs, mode = c("WALK", "TRANSIT"),
                                          departure_datetime = at(s$back_start), time_window = s$back_end - s$back_start,
                                          max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
                                          walk_speed = tr$walk_speed_kmh, progress = FALSE) |>
-          norm_expanded() |> last_departure()) |>
+          norm_expanded() |> last_departure(tr$max_walk_min, s$back_end)) |>
         dplyr::bind_rows()
       n0 <- nrow(fw)
       res <- fw |>

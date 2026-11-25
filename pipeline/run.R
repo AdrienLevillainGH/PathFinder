@@ -13,11 +13,15 @@
 # Steps: osm -> network -> elevation -> climbs -> timetables -> access -> times
 # ------------------------------------------------------------------
 
+# memory for the routing engine (Java); must be set before r5r is loaded
+if (is.null(getOption("java.parameters"))) options(java.parameters = "-Xmx8G")
+
 for (f in list.files(here::here("pipeline", "R"), pattern = "\\.R$", full.names = TRUE)) source(f, encoding = "UTF-8")
 
 STEPS <- c("osm", "network", "elevation", "climbs", "timetables", "access", "times")
 
 run_region <- function(id, redo_from = NULL, install = FALSE, today = Sys.Date()) {
+  check_setup(java = TRUE)
   cfg <- load_config(id)
   t0 <- Sys.time()
   redo <- if (is.null(redo_from)) character() else STEPS[seq(match(match.arg(redo_from, STEPS), STEPS), length(STEPS))]

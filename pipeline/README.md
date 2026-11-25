@@ -15,57 +15,74 @@ from real data, for one region at a time:
 
 Nothing here is specific to Alsace: a region is a YAML file in `config/`.
 
-## Install (once, on your PC)
+## Why Java?
 
-1. R ≥ 4.3 and RStudio.
-2. **Java 21** (for r5r): install *Eclipse Temurin 21 JDK* from adoptium.net, then restart RStudio.
-3. In R:
+Everything is run from R. One step, the train/coach times, uses **r5r**: an R package
+that drives **R5**, a routing engine written in Java (Conveyal). R does not ship with
+Java, so it must be installed once — from R, with `rJavaEnv` (no installer, no admin
+rights). The other steps do not use Java.
+
+## Step by step (Windows)
+
+**1. R and RStudio.** In the RStudio console, `R.version.string` should say 4.3 or newer
+(otherwise install the latest R from cran.r-project.org).
+
+**2. Get the code with GitHub Desktop** (desktop.github.com, sign in with your GitHub account):
+*File → Clone repository → GitHub.com →* `AdrienLevillainGH/PathFinder`.
+Local path: a folder **outside OneDrive** (downloads ≈ 1–2 GB), e.g. `C:\PathFinder`. *Clone*.
+
+**3. Open the project:** double-click `PathFinder.Rproj` in that folder. RStudio opens in it.
+
+**4. Install the packages** (console, 5–10 min; if asked to compile from source, answer *No*):
 
 ```r
 install.packages(c("here", "yaml", "dplyr", "tidyr", "purrr", "stringi", "sf", "terra",
-                   "igraph", "data.table", "jsonlite", "zip", "ggplot2", "r5r"))
-# check Java from R (should print 21.x):
-rJava::.jinit(); rJava::.jcall("java/lang/System", "S", "getProperty", "java.version")
+                   "igraph", "data.table", "jsonlite", "zip", "ggplot2", "r5r", "rJavaEnv"))
 ```
 
-4. Get the code: GitHub Desktop → *Clone* `AdrienLevillainGH/PathFinder` (or *Code → Download ZIP*).
-   Open `PathFinder.Rproj`.
+**5. Install Java 21 from R** (≈ 200 MB, once; answer *yes* when it asks to set
+JAVA_HOME and write `.Rprofile` in the project):
 
-## Run
+```r
+rJavaEnv::java_quick_install(version = 21)
+```
+
+Then *Session → Restart R*, and check:
 
 ```r
 source("pipeline/run.R")
-run_region("bruche")                    # test region first
+check_setup()        # → "setup ok: packages, OpenStreetMap reader, Java 21"
 ```
 
-First run of the Bruche test: roughly 30–45 min (an estimate) and ≈ 1 GB of downloads
-(OSM Alsace + Lorraine ≈ 400 MB, SNCF timetable, elevation tiles ≈ 25 × 8 MB).
-Later runs reuse everything in `pipeline/data-raw/` and `pipeline/work/`.
+**6. (Optional, 1–2 min) test on a made-up world:** `source("pipeline/tests/test_pipeline.R")`
+→ ends with *all pipeline checks pass*.
 
-Then **look at the charts** in `pipeline/out/bruche/diag/`:
-
-1. `1_network.png` — paths and tracks by type
-2. `2_climbs.png` — the climbs, coloured by average grade, with stations and coach stops
-3. `3_gain_length.png` — every climb, gain against length
-4. `4_profiles.png` — the 12 biggest climbs
-5. `5_times.png` — minutes from the first hub
-
-If they look right:
+**7. Run the test region** (keep RStudio open and the PC awake):
 
 ```r
-run_region("bruche", install = TRUE)    # copies the 5 files into public/data (replaces the demo)
+source("pipeline/run.R")
+run_region("bruche")
 ```
 
-Commit and push with GitHub Desktop; the site rebuilds by itself. (Or tell Claude
-where the files are; it can pick them up from your computer and push them.)
+Roughly 30–45 min the first time (an estimate). The console prints each step.
+If it stops with an error, send the red text to Claude; running `run_region("bruche")`
+again resumes after the last finished step.
 
-Whole region: `run_region("alsace", install = TRUE)` — roughly 1–2 h the first time,
-peak memory ≈ 10–12 GB (r5r uses 8 GB; change `transit: java_memory` if needed).
+**8. Look at the charts** in RStudio's *Files* pane → `pipeline/out/bruche/diag/`:
+network, climbs, gain vs length, profiles, travel times.
 
+**9. Hand the result over**, either way:
+- in the Claude desktop app, add the `PathFinder` folder to the conversation
+  (*+ → Add folder*) and tell Claude; it reads `pipeline/out/bruche/` and pushes; or
+- `run_region("bruche", install = TRUE)` (copies the 5 files into `public/data`),
+  then GitHub Desktop → *Commit to main* → *Push origin*. The site rebuilds in a minute.
+
+**Later:** `run_region("alsace", install = TRUE)` for the whole region — roughly 1–2 h
+the first time, peak memory ≈ 10–12 GB (r5r uses 8 GB; `transit: java_memory`).
 After changing settings in a YAML, redo from the step concerned:
 
 ```r
-run_region("bruche", redo_from = "climbs")   # climb settings
+run_region("bruche", redo_from = "climbs")      # climb settings
 run_region("bruche", redo_from = "timetables")  # new timetables / windows
 ```
 
@@ -94,21 +111,24 @@ Re-run in spring with fresh timetables to replace the borrowed days.
 New region: copy `bruche.yml`, change `id`, `name`, `area`, `hubs`.
 Outside France, set `crs`, the OSM extracts, the GTFS feeds and `dem: source: folder`.
 
-## Tests (no downloads, no Java)
+## Tests (no downloads)
 
 ```
 Rscript pipeline/tests/test_pipeline.R
 ```
 
 Builds a small made-up world (two hills, a grid of tracks, a switchback path,
-a train and a coach line with a summer-only service), runs every step except
-r5r, and loads the result with the app's own engine.
+a train and a coach line with a summer-only service) and runs every step on it.
+The r5r step runs where `osmium` is installed (to make a .pbf of the made-up
+world; skipped on Windows). The result is loaded with the app's own engine
+when Node is installed.
 
 ## Files
 
 ```
 run.R                entry point: run_region()
 config/*.yml         one file per region (bruche extends alsace)
+R/setup.R            check_setup(): packages, OSM reader, Java 21
 R/utils.R            helpers (caching, hstore tags, smoothing, ids, checks)
 R/config.R           region config, study area
 R/download.R         Geofabrik, GTFS

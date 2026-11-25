@@ -54,6 +54,8 @@ make_world <- function(dir) {
     add_way(rep(X0 + gx, length(ys)), ys, c(highway = "track", tracktype = "grade3"))
     add_way(rep(X0 + gx, 11), Y0 + seq(0, 1000, 100), c(highway = "unclassified"))   # ...lanes join them to the road
   }
+  # the road from Hubville station to the valley
+  add_way(seq(X0 - 3000, X0, length.out = 31), seq(Y0 - 1000, Y0, length.out = 31), c(highway = "secondary", name = "Route de Hubville"))
   # switchback path up the big hill (ends on the track vertex at the summit)
   zz <- c(0, 300, -300, 300, -300, 300, -300, 300, -300, 300, 0)
   sy <- seq(Y0 + 1000, Y0 + 3500, length.out = length(zz))
