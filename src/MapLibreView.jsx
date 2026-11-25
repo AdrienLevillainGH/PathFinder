@@ -90,9 +90,9 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
         paint: { "line-color": theme.sel, "line-width": 1.5, "line-opacity": 0.6, "line-dasharray": [2, 3] } });
       // stops you switch on: coaches small, trains larger; the ones you can reach (out and back) solid
       map.addLayer({ id: "stops-coach", type: "circle", source: "stations", minzoom: 9, filter: ["==", ["get", "kind"], "coach"],
-        paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 2, 14, 4.5],
-                 "circle-color": ["case", ["==", ["get", "reach"], 1], "#FFFFFF", "#E6E2D6"],
-                 "circle-stroke-color": "#1B1A16", "circle-stroke-opacity": ["case", ["==", ["get", "reach"], 1], 1, 0.45], "circle-stroke-width": 1.2 } });
+        paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 2.5, 14, 5],
+                 "circle-color": ["case", ["==", ["get", "reach"], 1], "#2F6DB5", "#A9BEDA"],
+                 "circle-stroke-color": "#FFFFFF", "circle-stroke-width": 1.2 } });
       map.addLayer({ id: "stops-rail", type: "circle", source: "stations", filter: ["==", ["get", "kind"], "rail"],
         paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 14, 6.5],
                  "circle-color": ["case", ["==", ["get", "reach"], 1], theme.accentBg, "#FFFFFF"],
@@ -218,7 +218,12 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
             <div className="px-2 pb-1 pt-2 text-xs dl-faint">Also show</div>
             {Object.entries(EXTRAS).map(([k, label]) => (
               <button key={k} onClick={() => setLayers({ ...layers, [k]: !layers[k] })} className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left">
-                {label}{layers[k] && <Check size={18} style={{ color: "var(--abg)" }} />}
+                <span className="flex items-center gap-2">
+                  {k === "trains" && <span className="inline-block h-3 w-3 rounded-full border-2 border-white" style={{ background: theme.accentBg, boxShadow: "0 0 0 1px #0002" }} />}
+                  {k === "coaches" && <span className="inline-block h-2.5 w-2.5 rounded-full border border-white" style={{ background: "#2F6DB5", boxShadow: "0 0 0 1px #0002" }} />}
+                  {label}
+                </span>
+                {layers[k] && <Check size={18} style={{ color: "var(--abg)" }} />}
               </button>
             ))}
           </div>
