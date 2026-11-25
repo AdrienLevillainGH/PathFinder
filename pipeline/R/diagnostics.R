@@ -9,7 +9,7 @@ WAY_LABS <- c(m = "Mountain path", p = "Hiking path", t = "Forest track", r = "R
 diag_theme <- function() {
   ggplot2::theme_minimal(base_size = 10) +
     ggplot2::theme(panel.grid = ggplot2::element_line(colour = "grey92", linewidth = 0.3),
-                   legend.position = "bottom", plot.title.position = "plot")
+                   legend.position = "bottom", plot.title.position = "plot", legend.key.width = ggplot2::unit(1.5, "cm"))
 }
 
 diag_save <- function(p, cfg, name, w = 8, h = 8) {

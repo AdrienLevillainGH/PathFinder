@@ -54,20 +54,29 @@ export_app_data <- function(cfg, prof, acc, tp, ttm, dem = NULL, dir = file.path
     }), tp$hubs$id)
   })
 
-  ll <- function(x, y) { p <- to_lonlat(x, y, cfg$crs); purrr::map2(round(p$lon, 5), round(p$lat, 5), c) }
+  # compact: heights in dm and lon/lat in 1e-5 degrees, as differences
+  # from the previous point (the app's engine unpacks them); 3 x smaller
+  delta <- function(v) as.integer(c(v[1], diff(v)))
+  pack <- function(x, y, z) {
+    p <- to_lonlat(x, y, cfg$crs)
+    list(z10 = delta(round(z * 10)), lon = delta(round(p$lon * 1e5)), lat = delta(round(p$lat * 1e5)))
+  }
   climbs <- purrr::pmap(prof, function(...) {
     r <- list(...)
-    list(id = r$id, name = r$name, towards = r$towards,
-         z = r$z, coords = ll(r$x, r$y),
+    c(list(id = r$id, name = r$name, towards = r$towards), pack(r$x, r$y, r$z), list(
          way = runs(r$way), surf = runs(r$surf),
          len = round((r$n - 1) * step), dplus = round(r$dplus), dminus = round(r$dminus),
          track = round(r$track, 2), paved = round(r$paved, 2),
-         sac = if (is.na(r$sac)) NULL else r$sac, marked = r$marked >= 0.5)
+         sac = if (is.na(r$sac)) NULL else r$sac, marked = r$marked >= 0.5))
   })
 
+  # the 15 closest stops per climb are plenty (and keep the file small)
   access <- acc |>
     dplyr::filter(climb %in% prof$id, place %in% order) |>
     dplyr::arrange(climb, pmin(d0, d1)) |>
+    dplyr::group_by(climb) |>
+    dplyr::slice_head(n = 15) |>
+    dplyr::ungroup() |>
     dplyr::mutate(d0 = pmin(d0, 99999), d1 = pmin(d1, 99999))
   access <- split(access, access$climb) |>
     purrr::map(function(a) purrr::pmap(a[, c("place", "d0", "d1")], function(place, d0, d1) list(place, d0, d1)))
@@ -76,7 +85,7 @@ export_app_data <- function(cfg, prof, acc, tp, ttm, dem = NULL, dir = file.path
                                                  networks = purrr::pmap(f$coverage, function(...) {
                                                    r <- list(...); list(name = r$agency_name %||% r$agency_id, from = format(r$first), to = format(r$last)) })))
   meta <- list(
-    app = "PathFinder", version = paste0("0.4-", cfg$id), built = format(Sys.Date()), demo = FALSE,
+    app = "PathFinder", version = paste0("0.4-", cfg$id), built = format(Sys.Date()), demo = FALSE, climb_format = "delta1",
     region = cfg$name, profile_step_m = step, access_cutoff_m = cfg$access$max_walk_m,
     notes = c("Paths and tracks: OpenStreetMap. Elevation: IGN RGE ALTI 5 m, smoothed over about 100 m.",
               "Climbs are the most direct ways up to each high point; the app finds the best stretch inside each.",

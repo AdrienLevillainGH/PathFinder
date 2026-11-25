@@ -33,19 +33,30 @@ st_read_or_empty <- function(file, query, wkt) {
            error = function(e) { warning(basename(file), ": ", conditionMessage(e)); NULL })
 }
 
-osm_read <- function(cfg, files = osm_files(cfg)) {
+# read far enough around the climbs to walk to them from a stop
+osm_reach_wkt <- function(cfg) {
   A <- area_polygon(cfg)
-  # read far enough around the climbs to walk to them from a stop
   reach <- sf::st_buffer(A$metric, cfg$access$max_walk_m) |> sf::st_transform(4326)
-  wkt <- sf::st_as_text(sf::st_geometry(reach)[[1]])
-  hw <- unique(c(cfg$network$trail_highways, cfg$network$minor_roads, cfg$network$walk_only))
+  sf::st_as_text(sf::st_geometry(reach)[[1]])
+}
 
-  one <- function(q) {
-    parts <- Filter(Negate(is.null), lapply(files, st_read_or_empty, query = q, wkt = wkt))
-    if (!length(parts)) return(NULL)
-    x <- do.call(rbind, parts)
-    x[!duplicated(x$osm_id), ]                     # a way in two extracts is kept once
-  }
+osm_read_query <- function(files, q, wkt) {
+  parts <- Filter(Negate(is.null), lapply(files, st_read_or_empty, query = q, wkt = wkt))
+  if (!length(parts)) return(NULL)
+  x <- do.call(rbind, parts)
+  x[!duplicated(x$osm_id), ]                       # a feature in two extracts is kept once
+}
+
+# named summits, castles, viewpoints, towers and villages
+osm_read_features <- function(cfg, files = osm_files(cfg)) {
+  feats <- osm_read_query(files, osm_query_features(), osm_reach_wkt(cfg))
+  if (is.null(feats)) NULL else osm_feature_table(feats, cfg$crs)
+}
+
+osm_read <- function(cfg, files = osm_files(cfg)) {
+  wkt <- osm_reach_wkt(cfg)
+  hw <- unique(c(cfg$network$trail_highways, cfg$network$minor_roads, cfg$network$walk_only))
+  one <- function(q) osm_read_query(files, q, wkt)
   lines <- one(osm_query_lines(hw))
   if (is.null(lines) || !nrow(lines)) stop("no ways read from ", paste(basename(files), collapse = ", "), call. = FALSE)
   say("OSM ways: %d", nrow(lines))
@@ -69,7 +80,7 @@ osm_feature_table <- function(feats, crs) {
   kind[is.na(kind) & feats$man_made %in% "tower"] <- "tower"
   kind[is.na(kind) & !is.na(feats$place)] <- "place"
   xy <- sf::st_coordinates(sf::st_transform(feats, crs))
-  tibble::tibble(osm_id = feats$osm_id, name = feats$name, kind = kind,
+  tibble::tibble(osm_id = feats$osm_id, name = feats$name, kind = kind, place = feats$place,
                  ele = suppressWarnings(as.numeric(hstore_get(feats$other_tags, "ele"))),
                  x = xy[, 1], y = xy[, 2]) |>
     dplyr::filter(!is.na(kind)) |>
@@ -184,9 +195,19 @@ osm_flag_edges <- function(net, osm, cfg) {
   mid <- edge_midpoints(net$verts, net$edges)
   pts <- sf::st_as_sf(mid, coords = c("mx", "my"), crs = cfg$crs)
   inside <- lengths(sf::st_intersects(pts, A)) > 0
-  marked <- if (is.null(osm$routes) || !nrow(osm$routes)) rep(FALSE, nrow(mid)) else
-    lengths(sf::st_is_within_distance(pts, osm$routes, 3)) > 0
-  flags <- tibble::tibble(edge = mid$edge, in_area = inside, marked = marked)
+  flags <- tibble::tibble(edge = mid$edge, in_area = inside)
+  # on a marked route: route relations reuse the ways' nodes, so most of
+  # the edge's vertices are route vertices (exact match, to the cm)
+  if (!is.null(osm$routes) && nrow(osm$routes)) {
+    rk <- sf::st_coordinates(osm$routes)
+    rk <- tibble::tibble(kx = round(rk[, "X"] * 100), ky = round(rk[, "Y"] * 100), on = TRUE) |> dplyr::distinct()
+    share <- net$verts |>
+      dplyr::mutate(kx = round(x * 100), ky = round(y * 100)) |>
+      dplyr::left_join(rk, by = c("kx", "ky")) |>
+      dplyr::group_by(edge) |>
+      dplyr::summarise(marked = mean(!is.na(on)) >= 0.5, .groups = "drop")
+    flags <- dplyr::left_join(flags, share, by = "edge")
+  } else flags$marked <- FALSE
   n0 <- nrow(net$edges)
   net$edges <- net$edges |>
     dplyr::left_join(flags, by = "edge") |>

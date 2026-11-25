@@ -74,7 +74,8 @@ export function prepare({ meta, stations, ttm, climbs, access }) {
   const order = ttm.order;
   const pos = Object.fromEntries(order.map((id, i) => [id, i]));
   const byId = Object.fromEntries(stations.stations.map((s) => [s.id, s]));
-  const prepped = climbs.map((c) => {
+  const prepped = climbs.map((c0) => {
+    const c = c0.z10 ? unpack(c0) : c0;
     const n = c.z.length;
     const wayE = expand(c.way || [[0, "p"]], n - 1);
     const surfE = expand(c.surf || [[0, "n"]], n - 1);
@@ -86,6 +87,20 @@ export function prepare({ meta, stations, ttm, climbs, access }) {
   });
   return { meta, step, order, pos, stations: stations.stations, lines: stations.lines, byId, ttm, climbs: prepped,
            climbById: Object.fromEntries(prepped.map((c) => [c.id, c])) };
+}
+
+// compact climbs (pipeline): heights in decimetres and coordinates in
+// 1e-5 degrees, each as differences from the previous point
+function undelta(d, scale) {
+  const out = new Array(d.length);
+  let v = 0;
+  for (let i = 0; i < d.length; i++) { v += d[i]; out[i] = v / scale; }
+  return out;
+}
+function unpack(c) {
+  const { z10, lon, lat, ...rest } = c;
+  const x = undelta(lon, 1e5), y = undelta(lat, 1e5);
+  return { ...rest, z: undelta(z10, 10), coords: x.map((v, i) => [v, y[i]]) };
 }
 
 // runs [[first edge, code], ...] → one code per edge

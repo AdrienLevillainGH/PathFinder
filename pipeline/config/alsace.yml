@@ -65,7 +65,8 @@ transit:
       label: SNCF (TER Grand Est)
       url: https://eu.ftp.opendatasoft.com/sncf/plandata/Export_OpenData_SNCF_GTFS_NewTripId.zip
       page: https://transport.data.gouv.fr/datasets/horaires-sncf
-      exclude: "TGV|OUIGO|Lyria"   # regex on route names and stop ids: no high-speed trains
+      exclude: 'TGV|OUIGO|Lyria|OCEICE|\bICE\b'   # regex on route names and stop ids: no TGV, OUIGO, Lyria, ICE
+      coach_stops: 'OCECar'        # SNCF coach stops ("Car TER"), even on lines filed as rail
     - id: fluo
       label: Fluo Grand Est (regional coaches)
       url: https://transport.data.gouv.fr/resources/83635/download

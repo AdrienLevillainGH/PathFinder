@@ -30,6 +30,11 @@ run_region <- function(id, redo_from = NULL, install = FALSE, today = Sys.Date()
   say("== %s ==", cfg$name)
 
   osm <- cached(f("1_osm.rds"), osm_read(cfg), "osm" %in% redo)
+  if (!is.null(osm$features) && !"place" %in% names(osm$features)) {   # cache from before 26 Nov 2026
+    say("re-reading named places (village names for coach stops)")
+    osm$features <- osm_read_features(cfg)
+    saveRDS(osm, f("1_osm.rds"))
+  }
   net <- cached(f("2_network.rds"), {
     osm_network(osm$lines, osm_classify(osm$lines, cfg)) |> osm_flag_edges(osm, cfg)
   }, "network" %in% redo)
@@ -44,6 +49,7 @@ run_region <- function(id, redo_from = NULL, install = FALSE, today = Sys.Date()
     climb_profiles(sel, G, ele$pts, ele$net, osm, cfg)
   }, "climbs" %in% redo)
   tp <- cached(f(sprintf("5_timetables_%s.rds", today)), transit_prepare(cfg, today), "timetables" %in% redo)
+  tp$places <- place_towns(tp$places, osm$features)
   acc <- cached(f(sprintf("6_access_%s.rds", today)), access_table(ele$net, climbs, tp$places, cfg), "access" %in% redo)
   ttm <- transit_times(cfg, tp, unique(c(acc$place, tp$hubs$id)))
 

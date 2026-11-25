@@ -105,9 +105,12 @@ make_world <- function(dir) {
                             route_long_name = c("Hubville - Far", "Hubville - Elsewhere"), route_type = "2"),
     trips = tibble::tibble(route_id = c("R1", "R1", "R1", "R1", "T1"), service_id = "SAT",
                            trip_id = c("o1", "o2", "b1", "b2", "tgv1")),
-    calendar = tibble::tibble(service_id = "SAT", monday = "0", tuesday = "0", wednesday = "0", thursday = "0", friday = "0",
-                              saturday = "1", sunday = "0", start_date = "20261101", end_date = "20270331"),
-    calendar_dates = tibble::tibble(service_id = "SAT", date = "20261226", exception_type = "2"))
+    # like the SNCF file: no calendar.txt, every day listed in calendar_dates
+    calendar_dates = {
+      d <- seq(as.Date("2026-11-01"), as.Date("2027-03-31"), by = "day")
+      d <- d[as.POSIXlt(d)$wday == 6 & d != as.Date("2026-12-26")]
+      tibble::tibble(service_id = "SAT", date = format(d, "%Y%m%d"), exception_type = "1")
+    })
   st <- function(trip, stops, t0) tibble::tibble(trip_id = trip, arrival_time = hm(t0 + c(0, 12, 22)[seq_along(stops)]),
                                                  departure_time = hm(t0 + c(0, 12, 22)[seq_along(stops)]),
                                                  stop_id = stops, stop_sequence = as.character(seq_along(stops)))

@@ -27,7 +27,7 @@ gtfs_read <- function(zipfile) {
   }
   for (need in c("routes", "trips", "stop_times", "stops"))
     if (is.null(g[[need]])) stop(basename(zipfile), ": no ", need, ".txt", call. = FALSE)
-  if (is.null(g$calendar) && is.null(g$calendar_dates)) stop(basename(zipfile), ": no calendar", call. = FALSE)
+  if (is.null(g[["calendar"]]) && is.null(g$calendar_dates)) stop(basename(zipfile), ": no calendar", call. = FALSE)
   g
 }
 
@@ -71,7 +71,7 @@ gtfs_clip <- function(g, area_ll, exclude = NULL, feed = "") {
 
   out <- list(routes = routes, trips = trips, stop_times = stt, stops = stops)
   if (!is.null(g$agency)) out$agency <- g$agency
-  if (!is.null(g$calendar)) out$calendar <- dplyr::filter(g$calendar, service_id %in% trips$service_id)
+  if (!is.null(g[["calendar"]])) out$calendar <- dplyr::filter(g[["calendar"]], service_id %in% trips$service_id)
   if (!is.null(g$calendar_dates)) out$calendar_dates <- dplyr::filter(g$calendar_dates, service_id %in% trips$service_id)
   if (!is.null(g$transfers)) out$transfers <- dplyr::filter(g$transfers, from_stop_id %in% stops$stop_id, to_stop_id %in% stops$stop_id)
   if (!is.null(g$feed_info)) out$feed_info <- g$feed_info
@@ -82,8 +82,8 @@ gtfs_clip <- function(g, area_ll, exclude = NULL, feed = "") {
 # every (service, date) on which a service runs
 gtfs_service_days <- function(g) {
   parts <- list()
-  if (!is.null(g$calendar) && nrow(g$calendar)) {
-    cal <- g$calendar |>
+  if (!is.null(g[["calendar"]]) && nrow(g[["calendar"]])) {
+    cal <- g[["calendar"]] |>
       dplyr::mutate(start = as.Date(start_date, "%Y%m%d"), end = as.Date(end_date, "%Y%m%d")) |>
       dplyr::filter(!is.na(start), !is.na(end), end >= start)
     n <- as.integer(cal$end - cal$start) + 1L
@@ -93,7 +93,7 @@ gtfs_service_days <- function(g) {
     on <- flags[cbind(row, as.POSIXlt(date)$wday + 1L)]
     parts$cal <- tibble::tibble(service_id = cal$service_id[row], date = date)[on, ]
   }
-  days <- dplyr::bind_rows(parts)
+  days <- dplyr::bind_rows(c(list(tibble::tibble(service_id = character(), date = as.Date(character()))), parts))
   if (!is.null(g$calendar_dates) && nrow(g$calendar_dates)) {
     cd <- g$calendar_dates |> dplyr::mutate(date = as.Date(date, "%Y%m%d"))
     days <- days |>
@@ -185,8 +185,10 @@ gtfs_write <- function(g, file) {
   invisible(file)
 }
 
-# stop points actually served, with what serves them
-gtfs_stop_points <- function(g, feed) {
+# stop points actually served, with what serves them. `coach_stops`: a
+# regex for stop ids that are coach stops even on a "rail" route (SNCF
+# runs some coach services under train lines: StopPoint:OCECar TER-...)
+gtfs_stop_points <- function(g, feed, coach_stops = NULL) {
   rt <- g$routes |>
     dplyr::transmute(route_id, rail = col_or(g$routes, "route_type") %in% c("2", as.character(100:117)),
                      line = dplyr::if_else(col_or(g$routes, "route_short_name") != "", col_or(g$routes, "route_short_name"), col_or(g$routes, "route_long_name")))
@@ -196,6 +198,7 @@ gtfs_stop_points <- function(g, feed) {
     dplyr::inner_join(rt, by = "route_id") |>
     dplyr::group_by(stop_id) |>
     dplyr::summarise(rail = any(rail), lines = list(sort(unique(line[line != ""]))), trips = dplyr::n(), .groups = "drop")
+  if (!is.null(coach_stops) && nzchar(coach_stops)) serve$rail <- serve$rail & !grepl(coach_stops, serve$stop_id, perl = TRUE)
   st <- g$stops |>
     dplyr::mutate(parent = col_or(g$stops, "parent_station"), lon = as.numeric(stop_lon), lat = as.numeric(stop_lat))
   st |>
@@ -262,15 +265,16 @@ match_hubs <- function(places, hubs) {
 }
 
 # rail lines for the map: per route, its longest trip, as places
-gtfs_rail_lines <- function(g, members, feed) {
+gtfs_rail_lines <- function(g, members, feed, coach_stops = NULL) {
   rt <- g$routes |>
     dplyr::mutate(lname = col_or(g$routes, "route_long_name"), sname = col_or(g$routes, "route_short_name"),
                   rtype = col_or(g$routes, "route_type")) |>
     dplyr::filter(rtype %in% c("2", as.character(100:117)))
   if (!nrow(rt)) return(list())
   tr <- g$trips |> dplyr::filter(route_id %in% rt$route_id)
-  st <- g$stop_times |>
-    dplyr::filter(trip_id %in% tr$trip_id) |>
+  st <- dplyr::filter(g$stop_times, trip_id %in% tr$trip_id)
+  if (!is.null(coach_stops) && nzchar(coach_stops)) st <- dplyr::filter(st, !grepl(coach_stops, stop_id, perl = TRUE))
+  st <- st |>
     dplyr::mutate(seqn = as.integer(stop_sequence)) |>
     dplyr::left_join(dplyr::filter(members, feed == !!feed) |> dplyr::select(stop_id, place), by = "stop_id")
   longest <- st |> dplyr::count(trip_id) |> dplyr::inner_join(dplyr::select(tr, trip_id, route_id), by = "trip_id") |>
@@ -289,4 +293,27 @@ gtfs_rail_lines <- function(g, members, feed) {
   nm <- dplyr::if_else(seqs$lname != "", seqs$lname, seqs$sname)
   ids <- make.unique(hash_id(seqs$route_id, "L"), sep = "_")
   stats::setNames(purrr::map2(nm, seqs$stops, function(n, s) list(name = n, stops = s)), ids)
+}
+
+# Bas-Rhin coach stops are called "Mairie", "Centre", "Eglise"...: put the
+# village in front ("Grendelbruch \u00b7 Mairie"), from the nearest OSM
+# town/village (or any named place if their type is not known)
+place_towns <- function(places, features, max_m = 2500) {
+  if (is.null(features)) return(places)
+  towns <- dplyr::filter(features, kind == "place")
+  if ("place" %in% names(towns)) {
+    big <- dplyr::filter(towns, place %in% c("town", "village"))
+    if (nrow(big)) towns <- big
+  }
+  if (!nrow(towns)) return(places)
+  town <- rep(NA_character_, nrow(places))
+  idx <- seq_len(nrow(places))
+  for (ch in split(idx, ceiling(idx / 500))) {
+    d2 <- outer(places$x[ch], towns$x, "-")^2 + outer(places$y[ch], towns$y, "-")^2
+    j <- max.col(-d2, ties.method = "first")
+    town[ch] <- ifelse(d2[cbind(seq_along(ch), j)] <= max_m^2, towns$name[j], NA_character_)
+  }
+  named <- !is.na(town) & !mapply(function(t, n) grepl(t, n, fixed = TRUE), norm_name(town), norm_name(places$name))
+  places$name <- ifelse(places$kind == "coach" & named, paste0(town, " \u00b7 ", places$name), places$name)
+  places
 }

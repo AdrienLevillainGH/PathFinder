@@ -20,11 +20,12 @@ transit_prepare <- function(cfg, today = Sys.Date(), zips = gtfs_files(cfg)) {
     p <- gtfs_patch_dates(g, scen$date, f$id)
     list(id = f$id, label = f$label, page = f$page, g = p$g, log = p$log, coverage = p$coverage)
   })
-  points <- purrr::map(feeds, function(f) gtfs_stop_points(f$g, f$id)) |> dplyr::bind_rows()
+  coach <- purrr::map_chr(cfg$transit$feeds, function(f) f$coach_stops %||% "") |> stats::setNames(purrr::map_chr(cfg$transit$feeds, "id"))
+  points <- purrr::map(feeds, function(f) gtfs_stop_points(f$g, f$id, coach[[f$id]])) |> dplyr::bind_rows()
   pl <- gtfs_places(points, cfg)
   hubs <- match_hubs(pl$places, cfg$transit$hubs)
   say("hubs: %s", paste(hubs$name, collapse = ", "))
-  lines <- purrr::map(feeds, function(f) gtfs_rail_lines(f$g, pl$members, f$id)) |> purrr::list_flatten()
+  lines <- purrr::map(feeds, function(f) gtfs_rail_lines(f$g, pl$members, f$id, coach[[f$id]])) |> purrr::list_flatten()
   list(feeds = feeds, scen = scen, places = pl$places, members = pl$members, hubs = hubs, lines = lines)
 }
 
