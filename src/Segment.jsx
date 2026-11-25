@@ -4,6 +4,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContai
 import { fmtKm, fmtPct, fmtMin, fmtClock, fmtPace, difficulty, WAYS, SURFACES } from "./engine.js";
 import { gradeColor, GRADE_COLORS, GRADE_LABELS } from "./theme.js";
 import { projection, bboxOf, path, along, gpx } from "./geo.js";
+import { useWalk, approachLine } from "./walk.js";
 const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ default: m.DetailMapGL })));
 
 /* The segment page, after Komoot's route page: map on top, the card
@@ -22,6 +23,8 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
   const origin = db.byId[q.origin];
   const station = db.byId[r.station];
   const win = db.meta.windows.find((w) => w.id === q.window);
+  const walk = useWalk(c.id);
+  const appr = approachLine(r, walk, db);
 
   // the tab follows the section in view
   useEffect(() => {
@@ -52,8 +55,8 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
       {/* map */}
       <div className="relative" style={{ height: 300, background: "var(--land)" }}>
         {basemap
-          ? <Suspense fallback={null}><DetailMapGL r={r} db={db} layers={layers} theme={theme} gradeColor={gradeColor} /></Suspense>
-          : <DetailMap r={r} db={db} />}
+          ? <Suspense fallback={null}><DetailMapGL r={r} db={db} layers={layers} theme={theme} gradeColor={gradeColor} approach={appr} /></Suspense>
+          : <DetailMap r={r} db={db} approach={appr} />}
         <div className="absolute inset-x-0 top-0 flex justify-between p-4" style={{ paddingTop: "calc(env(safe-area-inset-top) + 1rem)" }}>
           <Round onClick={onClose} label="Back"><ArrowLeft size={22} /></Round>
           <div className="flex gap-2">
@@ -96,8 +99,8 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
               <div className="space-y-4">
                 <Row icon={TrainFront} main={r.train[0] === 0 ? `${station.name} · you start here` : `${station.name} · ${r.train[0]} min from ${origin.name}`}
                   sub={r.train[0] === 0 ? null : `${r.train[4] ? `${r.train[4]} change` : "direct"} · ${r.train[2]} trains in the window · slower connections up to ${r.train[1]} min`} />
-                <Row icon={Footprints} main={`${fmtKm(r.approach)} to the start · ≈ ${fmtMin(r.approachMin)}`}
-                  sub={`at ${fmtPace(pace)}${r.i > 0 ? ` · the last ${fmtKm(r.i * c.step)} are the lower part of this climb` : ""}`} />
+                <Row icon={Footprints} main={`${fmtKm(r.approach)} on foot to the start · ≈ ${fmtMin(r.approachMin)}`}
+                  sub={`along paths and roads (dotted on the map), at ${fmtPace(pace)}${r.i > 0 ? ` · the last ${fmtKm(r.i * c.step)} are the lower part of this climb` : ""}${appr && !appr.real ? " · route not drawn for this stop: the dashed line is only the direction" : ""}`} />
                 <Row icon={Clock} main={`≈ ${fmtMin(r.total)} from ${origin.name} to the start`}
                   sub={r.train[0] === 0 ? null : r.train[3] == null ? `no connection back from ${station.name} in the evening window` : `last connection back from ${station.name} ≈ ${fmtClock(r.train[3])}`} />
                 <a href="https://www.sncf-connect.com/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm underline dl-muted">
@@ -271,10 +274,10 @@ function Tip({ active, payload }) {
 
 /* ---------- map header ---------- */
 
-function DetailMap({ r, db }) {
+function DetailMap({ r, db, approach }) {
   const { coords, z } = along(r.climb, r.dir);
   const s = db.byId[r.station];
-  const pts = s ? [...coords, [s.lon, s.lat]] : coords;
+  const pts = [...coords, ...(s ? [[s.lon, s.lat]] : []), ...(approach?.coords || [])];
   const P = projection(bboxOf(pts, 0.004));
   const box = useRef(null);
   const [W, setW] = useState(390);
@@ -300,7 +303,9 @@ function DetailMap({ r, db }) {
     <div ref={box} className="absolute inset-0">
       <svg width="100%" height={H} viewBox={vb.join(" ")} role="img" aria-label={`Map of ${r.climb.name}`}>
         <path d={path(P, coords)} fill="none" stroke="var(--muted)" strokeOpacity="0.45" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
-        {s && <line x1={P.x(s.lon)} y1={P.y(s.lat)} x2={P.x(start[0])} y2={P.y(start[1])} stroke="var(--sel)" strokeWidth="1.8" strokeDasharray="2 4" strokeLinecap="round" vectorEffect="non-scaling-stroke" />}
+        {approach?.real
+          ? <path d={path(P, approach.coords)} fill="none" stroke="var(--sel)" strokeWidth="2.4" strokeDasharray="0.5 4" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+          : s && <line x1={P.x(s.lon)} y1={P.y(s.lat)} x2={P.x(start[0])} y2={P.y(start[1])} stroke="var(--sel)" strokeWidth="1.5" strokeOpacity="0.6" strokeDasharray="5 6" vectorEffect="non-scaling-stroke" />}
         <path d={path(P, coords.slice(r.i, r.j + 1))} fill="none" stroke="#FFFFFF" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
         {segs.map(([p1, p2, col], k) => (
           <line key={k} x1={P.x(p1[0])} y1={P.y(p1[1])} x2={P.x(p2[0])} y2={P.y(p2[1])} stroke={col} strokeWidth="6" strokeLinecap="round" vectorEffect="non-scaling-stroke" />

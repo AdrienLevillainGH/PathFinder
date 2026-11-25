@@ -114,5 +114,34 @@ install_in_app <- function(cfg) {
   files <- list.files(from, pattern = "\\.json$", full.names = TRUE)
   stopifnot(length(files) == 5)
   file.copy(files, to, overwrite = TRUE)
-  say("copied %d files to %s", length(files), to)
+  unlink(file.path(to, "routes"), recursive = TRUE)
+  file.copy(file.path(from, "routes"), to, recursive = TRUE)
+  say("copied the data and %d walking-route files to %s", length(list.files(file.path(to, "routes"))), to)
+}
+
+# walking routes, one small file per climb: data/routes/<climb>.json
+#   {"b": {"<stop>": [lon0, lat0, dlon1, dlat1, ...]}, "t": {...}}
+# in 1e-5 degrees, each point as the difference from the previous one
+export_routes <- function(routes, dir) {
+  rdir <- file.path(dir, "routes")
+  unlink(rdir, recursive = TRUE)
+  dir.create(rdir, recursive = TRUE, showWarnings = FALSE)
+  pack <- function(m) {
+    q <- round(m[, 1:2] * 1e5)
+    d <- rbind(q[1, ], diff(q))
+    as.integer(t(d))
+  }
+  by_climb <- split(routes, routes$climb)
+  for (id in names(by_climb)) {
+    r <- by_climb[[id]]
+    out <- lapply(c(b = "b", t = "t"), function(sd) {
+      x <- r[r$side == sd, ]
+      if (!nrow(x)) return(structure(list(), names = character()))
+      stats::setNames(lapply(x$coords, pack), x$place)
+    })
+    jsonlite::write_json(out, file.path(rdir, paste0(id, ".json")), auto_unbox = FALSE)
+  }
+  kb <- sum(file.size(list.files(rdir, full.names = TRUE))) / 1024
+  say("routes/          %8.1f KB in %d files", kb, length(by_climb))
+  invisible(rdir)
 }

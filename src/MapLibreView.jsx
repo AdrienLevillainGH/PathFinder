@@ -5,10 +5,22 @@ import { Plus, Minus, LocateFixed, Maximize2, Layers, Check } from "lucide-react
 import { along } from "./geo.js";
 import { fmtKm } from "./engine.js";
 import { BASES, OVERLAYS, baseStyle, applyLayers, credits, circle } from "./basemap.js";
+import { useWalk, approachLine } from "./walk.js";
 
 /* The explore map on a real background (IGN or OSM tiles), drawn by
    MapLibre. Same props and behaviour as the hand-drawn MapView, which the
-   app still uses wherever tiles cannot load (inside Claude). */
+   app still uses wherever tiles cannot load (inside Claude).
+   Kept quiet on purpose: by default only the selected match, its walk from
+   the stop and the start station are drawn. All the matches, the stops and
+   the reachable area are layers you switch on (layers.all/stops/reach). */
+
+// what else can go on the map (off by default)
+export const EXTRAS = {
+  all: "All the matches",
+  trains: "Train stations",
+  coaches: "Coach stops",
+  reach: "Reachable area",
+};
 
 const NAV_SVG = `<svg viewBox="0 0 24 24" width="12" height="12"><path d="M3 11 22 2 13 21 11 13 3 11Z" fill="#fff"/></svg>`;
 const TRAIN_SVG = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><rect x="5" y="3" width="14" height="13" rx="3"/><path d="M5 10h14M9 20l-2 2M15 20l2 2M9 16v4M15 16v4"/></svg>`;
@@ -25,19 +37,26 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
   const [scale, setScale] = useState(null);
   const [picker, setPicker] = useState(false);
 
-  // where the visible part of the map is (between the floating search and the sheet)
+  const showAll = Boolean(layers.all);
+  const sel = run.results.find((r) => r.id === selected) || run.near.find((r) => r.id === selected);
+  const walk = useWalk(sel?.id);
+  const appr = approachLine(sel, walk, db);
+
+  // frame what is drawn: the selected match and its walk (or all the matches)
   const fitResults = (map, animate = true) => {
     const b = new maplibregl.LngLatBounds();
-    const o = db.byId[q.origin];
-    if (o) b.extend([o.lon, o.lat]);
-    for (const r of run.results) {
+    const shown = showAll ? run.results : sel ? [sel] : [];
+    for (const r of shown) {
       const { coords } = along(r.climb, r.dir);
-      b.extend(coords[r.i]); b.extend(coords[r.j]);
+      for (let k = r.i; k <= r.j; k += 5) b.extend(coords[k]);
+      b.extend(coords[r.j]);
       const s = db.byId[r.station];
-      if (s) b.extend([s.lon, s.lat]);
+      if (s && (showAll || !appr)) b.extend([s.lon, s.lat]);
     }
+    if (!showAll && appr) appr.coords.forEach((c) => b.extend(c));
+    if (b.isEmpty()) { const o = db.byId[q.origin]; if (o) b.extend([o.lon, o.lat]); }
     if (b.isEmpty()) return;
-    map.fitBounds(b, { padding: { top: pad.top + 10, bottom: pad.bottom + 10, left: pad.left + 10, right: pad.right + 10 }, maxZoom: 13.5, duration: animate ? 700 : 0 });
+    map.fitBounds(b, { padding: { top: pad.top + 16, bottom: pad.bottom + 16, left: pad.left + 16, right: pad.right + 16 }, maxZoom: 14.5, duration: animate ? 600 : 0 });
   };
 
   // create the map once
@@ -52,10 +71,9 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
     const init = () => {
       if (map.getSource("reach")) return;
       const empty = fc([]);
-      for (const id of ["reach", "climbs", "near", "results", "approach", "stations"]) map.addSource(id, { type: "geojson", data: empty });
-      map.addLayer({ id: "reach", type: "fill", source: "reach", paint: { "fill-color": theme.accentBg, "fill-opacity": 0.1 } });
-      map.addLayer({ id: "climbs", type: "line", source: "climbs", paint: { "line-color": "#55524A", "line-opacity": 0.45, "line-width": 1.4 } });
-      map.addLayer({ id: "near", type: "line", source: "near", paint: { "line-color": theme.route, "line-width": 3, "line-dasharray": [1, 1.6] } });
+      for (const id of ["reach", "near", "results", "approach", "stations"]) map.addSource(id, { type: "geojson", data: empty });
+      map.addLayer({ id: "reach", type: "fill", source: "reach", paint: { "fill-color": theme.accentBg, "fill-opacity": 0.08 } });
+      map.addLayer({ id: "near", type: "line", source: "near", paint: { "line-color": theme.route, "line-width": 2.5, "line-opacity": 0.8, "line-dasharray": [1, 1.6] } });
       map.addLayer({ id: "results-casing", type: "line", source: "results", layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": "#FFFFFF", "line-width": ["case", ["==", ["get", "sel"], 1], 11, 8] } });
       map.addLayer({ id: "results-line", type: "line", source: "results", layout: { "line-cap": "round", "line-join": "round" },
@@ -63,11 +81,22 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
       map.addLayer({ id: "results-dash", type: "line", source: "results", filter: ["==", ["get", "sel"], 1],
         paint: { "line-color": "#FFFFFF", "line-width": 2, "line-dasharray": [2.5, 2.5] } });
       map.addLayer({ id: "results-hit", type: "line", source: "results", paint: { "line-color": "#000", "line-opacity": 0, "line-width": 24 } });
-      map.addLayer({ id: "approach", type: "line", source: "approach", layout: { "line-cap": "round" },
-        paint: { "line-color": theme.sel, "line-width": 2, "line-dasharray": [0.2, 2.2] } });
-      map.addLayer({ id: "stations", type: "circle", source: "stations",
-        paint: { "circle-radius": ["case", ["==", ["get", "reach"], 1], 5, 3.5], "circle-color": ["case", ["==", ["get", "reach"], 1], "#FFFFFF", "#D8D4C8"],
-                 "circle-stroke-color": "#1B1A16", "circle-stroke-width": ["case", ["==", ["get", "reach"], 1], 2, 1] } });
+      // the walk from the stop: dots along the real route; dashes when the route is not drawn (straight line)
+      map.addLayer({ id: "approach-casing", type: "line", source: "approach", layout: { "line-cap": "round", "line-join": "round" },
+        filter: ["==", ["get", "real"], 1], paint: { "line-color": "#FFFFFF", "line-width": 6, "line-opacity": 0.85 } });
+      map.addLayer({ id: "approach", type: "line", source: "approach", layout: { "line-cap": "round", "line-join": "round" },
+        filter: ["==", ["get", "real"], 1], paint: { "line-color": theme.sel, "line-width": 3, "line-dasharray": [0.1, 1.8] } });
+      map.addLayer({ id: "approach-straight", type: "line", source: "approach", filter: ["==", ["get", "real"], 0],
+        paint: { "line-color": theme.sel, "line-width": 1.5, "line-opacity": 0.6, "line-dasharray": [2, 3] } });
+      // stops you switch on: coaches small, trains larger; the ones you can reach (out and back) solid
+      map.addLayer({ id: "stops-coach", type: "circle", source: "stations", minzoom: 9, filter: ["==", ["get", "kind"], "coach"],
+        paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 9, 2, 14, 4.5],
+                 "circle-color": ["case", ["==", ["get", "reach"], 1], "#FFFFFF", "#E6E2D6"],
+                 "circle-stroke-color": "#1B1A16", "circle-stroke-opacity": ["case", ["==", ["get", "reach"], 1], 1, 0.45], "circle-stroke-width": 1.2 } });
+      map.addLayer({ id: "stops-rail", type: "circle", source: "stations", filter: ["==", ["get", "kind"], "rail"],
+        paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 8, 3.5, 14, 6.5],
+                 "circle-color": ["case", ["==", ["get", "reach"], 1], theme.accentBg, "#FFFFFF"],
+                 "circle-stroke-color": ["case", ["==", ["get", "reach"], 1], "#FFFFFF", theme.accentBg], "circle-stroke-width": 2 } });
       map.on("click", "results-hit", (e) => { const id = e.features?.[0]?.properties?.id; if (id) onSelectRef.current?.(id); });
       map.on("mouseenter", "results-hit", () => (map.getCanvas().style.cursor = "pointer"));
       map.on("mouseleave", "results-hit", () => (map.getCanvas().style.cursor = ""));
@@ -104,17 +133,15 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
     const map = mapRef.current;
     if (!ready) return;
     const R = q.maxApproach;
-    map.getSource("reach").setData(fc(db.stations.filter((s) => run.reach.has(s.id) || s.id === q.origin)
+    map.getSource("reach").setData(fc(!layers.reach ? [] : db.stations.filter((s) => run.reach.has(s.id) || s.id === q.origin)
       .map((s) => ({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [circle(s.lon, s.lat, R)] } }))));
-    map.getSource("climbs").setData(fc(db.climbs.map((c) => line(c.coords))));
-    map.getSource("near").setData(fc(run.near.map((r) => line(along(r.climb, r.dir).coords.slice(r.i, r.j + 1)))));
-    const sel = run.results.find((r) => r.id === selected);
-    const ordered = sel ? [...run.results.filter((r) => r.id !== selected), sel] : run.results;
-    map.getSource("results").setData(fc(ordered.map((r) => line(along(r.climb, r.dir).coords.slice(r.i, r.j + 1), { id: r.id, sel: r.id === selected ? 1 : 0 }))));
-    const s = sel && db.byId[sel.station];
-    map.getSource("approach").setData(fc(s ? [line([[s.lon, s.lat], along(sel.climb, sel.dir).coords[sel.i]])] : []));
-    map.getSource("stations").setData(fc(db.stations.map((st) => ({ type: "Feature", properties: { reach: run.reach.has(st.id) ? 1 : 0 },
-      geometry: { type: "Point", coordinates: [st.lon, st.lat] } }))));
+    map.getSource("near").setData(fc(!showAll ? [] : run.near.map((r) => line(along(r.climb, r.dir).coords.slice(r.i, r.j + 1)))));
+    const shown = showAll ? [...run.results.filter((r) => r.id !== selected), ...(sel ? [sel] : [])] : sel ? [sel] : [];
+    map.getSource("results").setData(fc(shown.map((r) => line(along(r.climb, r.dir).coords.slice(r.i, r.j + 1), { id: r.id, sel: r.id === selected ? 1 : 0 }))));
+    map.getSource("approach").setData(fc(appr ? [line(appr.coords, { real: appr.real ? 1 : 0 })] : []));
+    const kinds = new Set([layers.trains && "rail", layers.coaches && "coach"].filter(Boolean));
+    map.getSource("stations").setData(fc(db.stations.filter((st) => kinds.has(st.kind || "rail")).map((st) => ({ type: "Feature",
+      properties: { kind: st.kind || "rail", reach: run.reach.has(st.id) ? 1 : 0 }, geometry: { type: "Point", coordinates: [st.lon, st.lat] } }))));
 
     // HTML markers: the start station, and a pin at the start of each match
     markers.current.forEach((m) => m.remove());
@@ -125,25 +152,34 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
       el.innerHTML = `<div style="display:flex;align-items:center;gap:6px"><span style="width:26px;height:26px;border-radius:50%;background:${theme.accentBg};color:${theme.accentText};border:2.5px solid #fff;display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.3)">${TRAIN_SVG}</span><b style="font:600 13px system-ui;color:#1B1A16;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">${o.name}</b></div>`;
       markers.current.push(new maplibregl.Marker({ element: el, anchor: "left", offset: [-13, 0] }).setLngLat([o.lon, o.lat]).addTo(map));
     }
-    for (const r of ordered) {
+    // the stop you get off at, for the selected match
+    const st = sel && db.byId[sel.station];
+    if (st && st.id !== q.origin) {
+      const el = document.createElement("div");
+      el.innerHTML = `<div style="display:flex;align-items:center;gap:5px"><span style="width:22px;height:22px;border-radius:50%;background:#fff;color:${theme.accentBg};border:2px solid ${theme.accentBg};display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.3)">${TRAIN_SVG}</span><b style="font:600 12px system-ui;color:#1B1A16;text-shadow:0 0 3px #fff,0 0 3px #fff,0 0 3px #fff">${st.name}</b></div>`;
+      markers.current.push(new maplibregl.Marker({ element: el, anchor: "left", offset: [-11, 0] }).setLngLat([st.lon, st.lat]).addTo(map));
+    }
+    for (const r of shown) {
       const on = r.id === selected;
       const el = document.createElement("button");
       el.setAttribute("aria-label", r.climb.name);
-      el.style.cssText = `width:${on ? 30 : 24}px;height:${on ? 30 : 24}px;border-radius:50%;border:2.5px solid #fff;background:${on ? theme.sel : theme.route};display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;padding:0`;
+      el.style.cssText = `width:${on ? 26 : 20}px;height:${on ? 26 : 20}px;border-radius:50%;border:2px solid #fff;background:${on ? theme.sel : theme.route};display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.3);cursor:pointer;padding:0`;
       el.innerHTML = NAV_SVG;
       el.addEventListener("click", (e) => { e.stopPropagation(); onSelectRef.current?.(r.id); });
       markers.current.push(new maplibregl.Marker({ element: el }).setLngLat(along(r.climb, r.dir).coords[r.i]).addTo(map));
     }
-  }, [ready, run, selected, q.origin, q.maxApproach, theme]);
+  }, [ready, run, selected, q.origin, q.maxApproach, theme, showAll, layers.trains, layers.coaches, layers.reach, appr?.coords.length, appr?.real]);
 
-  // a new search reframes the map on its results
-  useEffect(() => { if (ready) fitResults(mapRef.current, true); }, [ready, run]);
+  // a new search, a new selection or a route that arrives reframes the map
+  // (with all the matches shown, only a new search does)
+  const frameKey = showAll ? `all|${run.results.length}` : `${selected}|${appr?.real ? 1 : 0}`;
+  useEffect(() => { if (ready) fitResults(mapRef.current, true); }, [ready, run, frameKey]);
 
   const map = mapRef.current;
   const nice = scale ? ([200, 500, 1000, 2000, 5000, 10000, 20000, 50000].find((m) => m / scale > 70) || 50000) : null;
   const btn = (Icon, label, act) => (
-    <button key={label} onClick={act} aria-label={label} title={label} className="dl-text flex h-11 w-11 items-center justify-center border-t dl-line first:border-t-0">
-      <Icon size={18} />
+    <button key={label} onClick={act} aria-label={label} title={label} className="dl-text flex h-9 w-9 items-center justify-center border-t dl-line first:border-t-0">
+      <Icon size={16} />
     </button>
   );
 
@@ -165,7 +201,7 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
 
       <div className="absolute right-3" style={{ bottom: pad.bottom + 12 }}>
         {picker && (
-          <div className="dl-float absolute bottom-0 right-[56px] w-56 rounded-2xl p-2 text-[15px]">
+          <div className="dl-float absolute bottom-0 right-[46px] w-56 rounded-2xl p-2 text-[14px]">
             <div className="px-2 pb-1 pt-1 text-xs dl-faint">Map</div>
             {Object.entries(BASES).map(([k, b]) => (
               <button key={k} onClick={() => setLayers({ ...layers, base: k })} className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left">
@@ -179,13 +215,19 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
               </button>
             ))}
             <p className="px-2 pt-1 text-[11px] dl-faint">Contour lines show from zoom 12.</p>
+            <div className="px-2 pb-1 pt-2 text-xs dl-faint">Also show</div>
+            {Object.entries(EXTRAS).map(([k, label]) => (
+              <button key={k} onClick={() => setLayers({ ...layers, [k]: !layers[k] })} className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left">
+                {label}{layers[k] && <Check size={18} style={{ color: "var(--abg)" }} />}
+              </button>
+            ))}
           </div>
         )}
-        <div className="dl-float flex flex-col overflow-hidden rounded-2xl">
+        <div className="dl-float flex flex-col overflow-hidden rounded-xl">
           {btn(Layers, "Map layers", () => setPicker(!picker))}
           {btn(Plus, "Zoom in", () => { userMoved.current = true; map?.zoomIn(); })}
           {btn(Minus, "Zoom out", () => { userMoved.current = true; map?.zoomOut(); })}
-          {btn(LocateFixed, "Back to the results", () => { map && fitResults(map, true); onMoved?.(null); })}
+          {btn(LocateFixed, "Back to the match", () => { map && fitResults(map, true); onMoved?.(null); })}
           {btn(Maximize2, "Whole region", () => { userMoved.current = true; map?.fitBounds([[6.85, 47.7], [8.1, 49.1]], { padding: { top: pad.top, bottom: pad.bottom, left: 20, right: 60 } }); })}
         </div>
       </div>
@@ -194,8 +236,12 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
 }
 
 /* the small map on the segment page: the stretch coloured by grade, its station */
-export function DetailMapGL({ r, db, layers, theme, gradeColor, height = 300 }) {
+export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height = 300 }) {
   const box = useRef(null);
+  const mapRef = useRef(null);
+  const apprRef = useRef(approach);
+  apprRef.current = approach;
+  const walkData = (a) => fc(a ? [line(a.coords, { real: a.real ? 1 : 0 })] : []);
   useEffect(() => {
     const { coords, z } = along(r.climb, r.dir);
     const map = new maplibregl.Map({ container: box.current, style: baseStyle(layers), center: coords[r.i], zoom: 13, interactive: true,
@@ -215,9 +261,14 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, height = 300 }) 
       map.addSource("whole", { type: "geojson", data: line(coords) });
       map.addSource("seg", { type: "geojson", data: line(seg), lineMetrics: true });
       const s = db.byId[r.station];
-      map.addSource("approach", { type: "geojson", data: fc(s ? [line([[s.lon, s.lat], seg[0]])] : []) });
+      map.addSource("approach", { type: "geojson", data: walkData(apprRef.current) });
       map.addLayer({ id: "whole", type: "line", source: "whole", paint: { "line-color": "#55524A", "line-opacity": 0.55, "line-width": 3 } });
-      map.addLayer({ id: "approach", type: "line", source: "approach", layout: { "line-cap": "round" }, paint: { "line-color": theme.sel, "line-width": 2.2, "line-dasharray": [0.2, 2.2] } });
+      map.addLayer({ id: "approach-casing", type: "line", source: "approach", layout: { "line-cap": "round", "line-join": "round" },
+        filter: ["==", ["get", "real"], 1], paint: { "line-color": "#FFFFFF", "line-width": 6, "line-opacity": 0.85 } });
+      map.addLayer({ id: "approach", type: "line", source: "approach", layout: { "line-cap": "round", "line-join": "round" },
+        filter: ["==", ["get", "real"], 1], paint: { "line-color": theme.sel, "line-width": 3, "line-dasharray": [0.1, 1.8] } });
+      map.addLayer({ id: "approach-straight", type: "line", source: "approach", filter: ["==", ["get", "real"], 0],
+        paint: { "line-color": theme.sel, "line-width": 1.5, "line-opacity": 0.6, "line-dasharray": [2, 3] } });
       map.addLayer({ id: "seg-casing", type: "line", source: "seg", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#FFFFFF", "line-width": 11 } });
       map.addLayer({ id: "seg", type: "line", source: "seg", layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-width": 7, "line-gradient": steps.length > 1 ? ["step", ["line-progress"], ...steps] : steps[0] } });
@@ -230,15 +281,32 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, height = 300 }) 
       pin(seg[0], theme.sel, `<svg viewBox="0 0 24 24" width="11" height="11"><path d="M7 4l12 8-12 8z" fill="#fff"/></svg>`);
       pin(seg[seg.length - 1], "#1B1A16", `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" stroke-width="2.6"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>`);
       if (s) pin([s.lon, s.lat], theme.accentBg, TRAIN_SVG.replace('stroke="currentColor"', `stroke="${theme.accentText}"`));
-      const b = new maplibregl.LngLatBounds();
-      seg.forEach((c) => b.extend(c));
-      if (s) b.extend([s.lon, s.lat]);
-      map.fitBounds(b, { padding: { top: 80, bottom: 50, left: 40, right: 40 }, maxZoom: 15.5, duration: 0 });
+      frame(map, false);
     };
     map.on("style.load", init);
     map.on("load", init);
-    return () => map.remove();
+    mapRef.current = map;
+    return () => { mapRef.current = null; map.remove(); };
   }, [r.id, r.i, r.j, r.dir]);
+
+  // the stretch, its stop and the walk between them
+  const frame = (map, animate) => {
+    const { coords } = along(r.climb, r.dir);
+    const b = new maplibregl.LngLatBounds();
+    coords.slice(r.i, r.j + 1).forEach((c) => b.extend(c));
+    const s = db.byId[r.station];
+    if (s) b.extend([s.lon, s.lat]);
+    apprRef.current?.coords.forEach((c) => b.extend(c));
+    map.fitBounds(b, { padding: { top: 80, bottom: 50, left: 40, right: 40 }, maxZoom: 15.5, duration: animate ? 500 : 0 });
+  };
+
+  // the walking route arrives after the page opens
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getSource("approach")) return;
+    map.getSource("approach").setData(walkData(approach));
+    frame(map, true);
+  }, [approach?.coords.length, approach?.real]);
   return (
     <div className="absolute inset-0">
       <div ref={box} style={{ position: "absolute", top: 0, left: 0, right: 0, height, background: "#EBEDDA" }} />

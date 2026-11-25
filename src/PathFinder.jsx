@@ -48,7 +48,9 @@ function fitQuery(q, db) {
   return Object.keys(fix).length ? { ...q, ...fix } : q;
 }
 const today = () => new Date().toISOString().slice(0, 10);
-const SHEET_PEEK = 238;
+// the results sheet: a thin bar, a row of cards, or the whole list
+const SHEET = { min: 58, peek: 176 };
+const sheetHeight = (st) => (st === "full" ? null : SHEET[st]);
 
 function kmBetween(a, b) {
   const dy = (b.lat - a.lat) * 111.2;
@@ -124,10 +126,10 @@ export default function PathFinder() {
   return (
     <div className="dl-root dl-bg dl-text fixed inset-0 flex flex-col">
       <style>{themeCss(theme)}</style>
-      <div className="dl-soft shrink-0 text-xs" style={{ paddingTop: "env(safe-area-inset-top)" }}>
-        <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-4 py-1.5">
-          <span><b>Preview</b> · {state.status !== "ready" || state.db.meta.demo ? "demo data" : `${state.db.meta.region} · data of ${state.db.meta.built}`} · nothing is sent to GitHub</span>
-          <button onClick={() => setPage("how")} className="underline">What is real?</button>
+      <div className="dl-soft shrink-0 text-[11px]" style={{ paddingTop: "env(safe-area-inset-top)" }}>
+        <div className="mx-auto flex max-w-2xl items-center justify-between gap-3 px-3 py-0.5">
+          <span className="truncate"><b>Preview</b> · {state.status !== "ready" || state.db.meta.demo ? "demo data" : `${state.db.meta.region} · data of ${state.db.meta.built}`}</span>
+          <button onClick={() => setPage("how")} className="shrink-0 underline">About</button>
         </div>
       </div>
 
@@ -192,8 +194,13 @@ export default function PathFinder() {
 /* ================================================================== */
 
 function Explore({ db, q, set, run, store, selected, setSelected, onOpen, openSheet, goHow, theme, basemap, layers, setLayers }) {
-  const [full, setFull] = useState(false);
+  const [sheet, setSheet] = useState("peek");
   const [centre, setCentre] = useState(null);
+  const full = sheet === "full";
+  const bottom = (sheetHeight(sheet) || SHEET.peek) + 8;
+  const pad = { top: 98, right: 52, bottom, left: 16 };
+  // moving the map lowers the sheet, so the map can be explored
+  const moved = (c) => { setCentre(c); if (c && sheet === "peek") setSheet("min"); };
   const origin = db.byId[q.origin];
   const preset = PRESETS.find((p) => p.id === q.preset);
   const win = db.meta.windows.find((w) => w.id === q.window);
@@ -213,31 +220,31 @@ function Explore({ db, q, set, run, store, selected, setSelected, onOpen, openSh
     <div className="absolute inset-0">
       {basemap === true && (
         <Suspense fallback={<div className="absolute inset-0" style={{ background: "var(--land)" }} />}>
-          <MapLibreView db={db} run={run} q={q} theme={theme} selected={selected} onSelect={setSelected} onMoved={setCentre}
-            pad={{ top: 136, right: 64, bottom: SHEET_PEEK + 8, left: 20 }} layers={layers} setLayers={setLayers} />
+          <MapLibreView db={db} run={run} q={q} theme={theme} selected={selected} onSelect={setSelected} onMoved={moved}
+            pad={pad} layers={layers} setLayers={setLayers} />
         </Suspense>
       )}
       {basemap === false && (
-        <MapView db={db} run={run} q={q} selected={selected} onSelect={setSelected} onMoved={setCentre}
-          pad={{ top: 136, right: 64, bottom: SHEET_PEEK + 8, left: 20 }} />
+        <MapView db={db} run={run} q={q} selected={selected} onSelect={setSelected} onMoved={moved}
+          pad={pad} />
       )}
       {basemap === null && <div className="absolute inset-0" style={{ background: "var(--land)" }} />}
 
       {/* floating search and chips */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 mx-auto max-w-2xl px-3 pt-3">
-        <div className="dl-float pointer-events-auto flex h-14 items-center rounded-full pl-5 pr-2">
-          <button onClick={() => openSheet("origin")} className="flex min-w-0 flex-1 items-center gap-3 text-left">
-            <Search size={22} className="shrink-0" />
-            <span className="truncate text-[17px]">From {origin.name}</span>
+      <div className="pointer-events-none absolute inset-x-0 top-0 mx-auto max-w-2xl px-2.5 pt-2">
+        <div className="dl-float pointer-events-auto flex h-11 items-center rounded-full pl-4 pr-1.5">
+          <button onClick={() => openSheet("origin")} className="flex min-w-0 flex-1 items-center gap-2.5 text-left">
+            <Search size={18} className="shrink-0" />
+            <span className="truncate text-[15px]">From {origin.name}</span>
           </button>
-          <span className="mx-2 h-7 w-px" style={{ background: "var(--line)" }} />
-          <button onClick={() => openSheet("filters")} className="flex items-center gap-2 rounded-full px-3 py-2 font-semibold" style={{ color: "var(--abg)" }}>
-            <SlidersHorizontal size={20} /> Filters
+          <span className="mx-1.5 h-6 w-px" style={{ background: "var(--line)" }} />
+          <button onClick={() => openSheet("filters")} className="flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-[14px] font-semibold" style={{ color: "var(--abg)" }}>
+            <SlidersHorizontal size={17} /> Filters
           </button>
         </div>
-        <div className="no-scrollbar pointer-events-auto mt-2.5 flex gap-2 overflow-x-auto pb-1">
+        <div className="no-scrollbar pointer-events-auto mt-1.5 flex gap-1.5 overflow-x-auto pb-1">
           <FloatChip icon={TrainFront} onClick={() => openSheet("filters")}>≤ {q.maxTrain} min</FloatChip>
-          <FloatChip icon={Radius} onClick={() => openSheet("filters")}>{fmtKm(q.maxApproach)} from the station</FloatChip>
+          <FloatChip icon={Radius} onClick={() => openSheet("filters")}>≤ {fmtKm(q.maxApproach)} on foot</FloatChip>
           <FloatChip icon={Mountain} onClick={() => openSheet("filters")}>{preset ? preset.label : terrainLine(q)}</FloatChip>
           <FloatChip icon={Clock} onClick={() => openSheet("filters")}>{win.label.replace(":00", "").replace(":00", "")}</FloatChip>
         </div>
@@ -245,22 +252,23 @@ function Explore({ db, q, set, run, store, selected, setSelected, onOpen, openSh
 
       {here && !full && (
         <button onClick={() => { set({ origin: here.id }); setCentre(null); }}
-          className="absolute left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full px-5 py-3 text-[15px] font-semibold text-white shadow-lg"
-          style={{ bottom: SHEET_PEEK + 16, background: "var(--cta)" }}>
-          <RotateCcw size={18} /> Start from {here.name}
+          className="absolute left-1/2 flex -translate-x-1/2 items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-[14px] font-semibold text-white shadow-lg"
+          style={{ bottom: bottom + 6, background: "var(--cta)" }}>
+          <RotateCcw size={16} /> Start from {here.name}
         </button>
       )}
 
-      <ResultsSheet run={run} q={q} set={set} store={store} full={full} setFull={setFull}
-        selected={selected} setSelected={setSelected} onOpen={onOpen} goHow={goHow} />
+      <ResultsSheet run={run} q={q} set={set} store={store} state={sheet} setState={setSheet}
+        selected={selected} setSelected={setSelected} onOpen={onOpen} goHow={goHow}
+        showAll={Boolean(layers.all)} setShowAll={(v) => setLayers({ ...layers, all: v })} />
     </div>
   );
 }
 
 function FloatChip({ icon: Icon, children, onClick }) {
   return (
-    <button onClick={onClick} className="dl-float flex h-11 shrink-0 items-center gap-2 rounded-2xl px-3.5 text-[15px]">
-      <Icon size={18} style={{ color: "var(--abg)" }} />
+    <button onClick={onClick} className="dl-float flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px]">
+      <Icon size={15} style={{ color: "var(--abg)" }} />
       <span className="whitespace-nowrap">{children}</span>
     </button>
   );
@@ -273,7 +281,8 @@ function terrainLine(q) {
 
 /* ---------- the sheet with the results ---------- */
 
-function ResultsSheet({ run, q, set, store, full, setFull, selected, setSelected, onOpen, goHow }) {
+function ResultsSheet({ run, q, set, store, state, setState, selected, setSelected, onOpen, goHow, showAll, setShowAll }) {
+  const full = state === "full";
   const strip = useRef(null);
   const programmatic = useRef(false);
   const drag = useRef(null);
@@ -311,32 +320,45 @@ function ResultsSheet({ run, q, set, store, full, setFull, selected, setSelected
   const sorts = [["total", "Soonest"], ["grade", "Steepest"], q.mode === "grade" ? ["long", "Longest"] : ["gain", q.dir === "down" ? "Most D−" : "Most D+"]];
 
   return (
-    <div className="dl-bg absolute inset-x-0 bottom-0 z-10 flex flex-col rounded-t-3xl shadow-[0_-4px_18px_rgba(0,0,0,0.12)]"
-      style={{ height: full ? "86%" : SHEET_PEEK, transition: "height .25s ease" }}>
-      <div className="mx-auto w-full max-w-2xl cursor-grab touch-none select-none px-4 pt-2"
-        onPointerDown={(e) => (drag.current = e.clientY)}
-        onPointerUp={(e) => {
-          const dy = drag.current == null ? 0 : e.clientY - drag.current;
-          drag.current = null;
-          if (dy < -25) setFull(true); else if (dy > 25) setFull(false); else setFull(!full);
-        }}>
-        <div className="mx-auto h-1.5 w-12 rounded-full" style={{ background: "var(--line)" }} />
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="text-[19px] font-semibold">{n} {word}{n === 1 ? "" : "s"}{run.near.length ? <span className="font-normal dl-muted"> · {run.near.length} near misses</span> : null}</div>
-            <div className="truncate text-xs dl-faint">Shaded: ≤ {fmtKm(q.maxApproach)} from a station ≤ {q.maxTrain} min away</div>
+    <div className="dl-bg absolute inset-x-0 bottom-0 z-10 flex flex-col rounded-t-2xl shadow-[0_-4px_18px_rgba(0,0,0,0.12)]"
+      style={{ height: full ? "86%" : SHEET[state], transition: "height .25s ease" }}>
+      <div className="mx-auto flex w-full max-w-2xl items-start gap-2 px-3 pt-1.5">
+        {/* the handle: drag up or down, or tap, to move between bar, cards and list */}
+        <div className="min-w-0 flex-1 cursor-grab touch-none select-none"
+          onPointerDown={(e) => (drag.current = e.clientY)}
+          onPointerUp={(e) => {
+            const dy = drag.current == null ? 0 : e.clientY - drag.current;
+            drag.current = null;
+            const order = ["min", "peek", "full"], i = order.indexOf(state);
+            if (dy < -25) setState(order[Math.min(2, i + 1)]);
+            else if (dy > 25) setState(order[Math.max(0, i - 1)]);
+            else setState(state === "min" ? "peek" : state === "peek" ? "full" : "peek");
+          }}>
+          <div className="mx-auto h-1 w-10 rounded-full" style={{ background: "var(--line)" }} />
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <div className="min-w-0">
+              <div className="truncate text-[15px] font-semibold">{n} {word}{n === 1 ? "" : "s"}{run.near.length ? <span className="font-normal dl-muted"> · {run.near.length} near misses</span> : null}</div>
+              <div className="truncate text-[11px] dl-faint">≤ {q.maxTrain} min · ≤ {fmtKm(q.maxApproach)} on foot · back the same day</div>
+            </div>
+            {full ? <ChevronDown size={18} className="shrink-0 dl-muted" /> : <ChevronUp size={18} className="shrink-0 dl-muted" />}
           </div>
-          {full ? <ChevronDown size={22} className="shrink-0 dl-muted" /> : <ChevronUp size={22} className="shrink-0 dl-muted" />}
         </div>
+        {n > 0 && (
+          <button onClick={() => setShowAll(!showAll)} aria-pressed={showAll}
+            className="mt-3 flex shrink-0 items-center gap-1 rounded-full border px-2.5 py-1 text-[12px] font-medium"
+            style={showAll ? { background: "var(--abg)", color: "var(--atext)", borderColor: "var(--abg)" } : { borderColor: "var(--line)" }}>
+            <MapIcon size={13} /> {showAll ? "All on map" : "Show all on map"}
+          </button>
+        )}
       </div>
 
-      {!full && (
-        <div ref={strip} onScroll={onScroll} className="no-scrollbar mt-2 flex gap-3 overflow-x-auto px-3 pb-3"
+      {state === "peek" && (
+        <div ref={strip} onScroll={onScroll} className="no-scrollbar mt-2 flex gap-2.5 overflow-x-auto px-3 pb-2"
           style={{ scrollSnapType: "x mandatory", scrollPaddingLeft: 12 }}>
           {run.results.map((r) => (
             <div key={r.id} data-id={r.id} style={{ scrollSnapAlign: "start" }} className="shrink-0">
               <Card r={r} on={r.id === selected} fav={Boolean(store.favourites[r.id])} done={store.done.some((d) => d.climbId === r.id)}
-                onClick={() => (r.id === selected ? onOpen(r) : setSelected(r.id))} width={318} />
+                onClick={() => (r.id === selected ? onOpen(r) : setSelected(r.id))} width={292} compact />
             </div>
           ))}
           {!n && <Empty>Nothing meets every filter. Pull up for the near misses and what each one is missing.</Empty>}
@@ -380,25 +402,25 @@ function ResultsSheet({ run, q, set, store, full, setFull, selected, setSelected
 }
 
 /* a result, as a Komoot card: picture on the left (here: the profile), facts on the right */
-function Card({ r, on, fav, done, onClick, width }) {
+function Card({ r, on, fav, done, onClick, width, compact }) {
   const d = r.dir === "down" ? "↘" : "↗";
   return (
-    <button onClick={onClick} className="dl-surface flex gap-3 rounded-3xl p-2.5 text-left"
-      style={{ width: width || "100%", boxShadow: on ? "0 0 0 2.5px var(--sel)" : "0 1px 6px rgba(0,0,0,0.10)" }}>
-      <div className="relative h-[118px] w-[104px] shrink-0 overflow-hidden rounded-2xl" style={{ background: "var(--slate)" }}>
+    <button onClick={onClick} className={`dl-surface flex gap-2.5 text-left ${compact ? "rounded-2xl p-2" : "rounded-3xl p-2.5"}`}
+      style={{ width: width || "100%", boxShadow: on ? "0 0 0 2px var(--sel)" : "0 1px 6px rgba(0,0,0,0.10)" }}>
+      <div className={`relative shrink-0 overflow-hidden rounded-xl ${compact ? "h-[88px] w-[78px]" : "h-[118px] w-[104px]"}`} style={{ background: "var(--slate)" }}>
         <Thumb r={r} />
-        <span className="dl-accent absolute left-1.5 top-1.5 rounded-lg px-1.5 py-0.5 text-[11px] font-semibold">{difficulty(r.grade)}</span>
-        <span className="absolute bottom-1.5 right-2 text-[17px] font-semibold tabular-nums text-white" style={{ textShadow: "0 1px 3px rgba(0,0,0,.6)" }}>{fmtPct(r.grade)}</span>
+        <span className="dl-accent absolute left-1 top-1 rounded-md px-1 py-0.5 text-[10px] font-semibold">{difficulty(r.grade)}</span>
+        <span className="absolute bottom-1 right-1.5 text-[14px] font-semibold tabular-nums text-white" style={{ textShadow: "0 1px 3px rgba(0,0,0,.6)" }}>{fmtPct(r.grade)}</span>
       </div>
-      <div className="min-w-0 flex-1 py-1 pr-1">
-        <div className="flex items-center gap-1.5 text-[13px] tabular-nums dl-muted">
-          <TrainFront size={15} style={{ color: "var(--abg)" }} />
+      <div className="min-w-0 flex-1 py-0.5 pr-1">
+        <div className="flex items-center gap-1.5 text-[12px] tabular-nums dl-muted">
+          <TrainFront size={13} style={{ color: "var(--abg)" }} />
           <span className="truncate">{r.train ? `${r.stationName} · ${r.train[0]} min` : "no station near"}</span>
           {fav && <Bookmark size={13} className="ml-auto shrink-0" fill="currentColor" />}
           {done && <CircleCheck size={13} className="shrink-0" />}
         </div>
-        <div className="mt-1 text-[17px] font-semibold leading-snug" style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.climb.name}</div>
-        <div className="mt-2 flex flex-wrap gap-x-1.5 text-[14px] tabular-nums dl-muted">
+        <div className={`mt-0.5 font-semibold leading-snug ${compact ? "text-[14px]" : "text-[16px]"}`} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.climb.name}</div>
+        <div className={`mt-1 flex flex-wrap gap-x-1.5 tabular-nums dl-muted ${compact ? "text-[12px]" : "text-[13px]"}`}>
           <span>{fmtMin(r.total)} away</span><span>·</span><span>{fmtKm(r.len)}</span><span>·</span><span>{d} {Math.round(r.up)} m</span>
         </div>
       </div>

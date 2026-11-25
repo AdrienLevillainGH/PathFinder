@@ -152,6 +152,24 @@ chk <- acc |> inner_join(pl, by = "place") |> inner_join(prof |> select(climb = 
   mutate(euclid = sqrt((px - xs)^2 + (py - ys)^2))
 ok(all(chk$d0[is.finite(chk$d0) & chk$d0 < 99999] >= chk$euclid[is.finite(chk$d0) & chk$d0 < 99999] - 1), "walking \u2265 straight line")
 
+# ---------------------------------------------------------------- walking routes
+message("walking routes")
+rt <- access_paths(net2, acc, prof, tp$places, cfg)
+ok(nrow(rt) > 0, sprintf("%d routes drawn", nrow(rt)))
+chk_rt <- rt |>
+  dplyr::mutate(m = purrr::map(coords, function(m) to_metric(m[, 1], m[, 2], 2154)),
+                len = purrr::map_dbl(m, function(p) sum(sqrt(diff(p$x)^2 + diff(p$y)^2))),
+                x0 = purrr::map_dbl(m, function(p) p$x[1]), y0 = purrr::map_dbl(m, function(p) p$y[1]),
+                x1 = purrr::map_dbl(m, function(p) dplyr::last(p$x)), y1 = purrr::map_dbl(m, function(p) dplyr::last(p$y))) |>
+  dplyr::inner_join(dplyr::select(tp$places, place = id, px = x, py = y), by = "place") |>
+  dplyr::inner_join(dplyr::select(prof, climb = id, xs, ys, xt, yt), by = "climb") |>
+  dplyr::mutate(ex = dplyr::if_else(side == "b", xs, xt), ey = dplyr::if_else(side == "b", ys, yt))
+ok(all(sqrt((chk_rt$x0 - chk_rt$px)^2 + (chk_rt$y0 - chk_rt$py)^2) < 1), "routes start at the stop")
+ok(all(sqrt((chk_rt$x1 - chk_rt$ex)^2 + (chk_rt$y1 - chk_rt$ey)^2) < 1), "…and end at the bottom (or top) of the climb")
+ok(all(abs(chk_rt$len - chk_rt$d) < 0.02 * chk_rt$d + 10), "drawn length = the walking distance used for the filters (not a straight line)")
+straight <- sqrt((chk_rt$px - chk_rt$ex)^2 + (chk_rt$py - chk_rt$ey)^2)
+ok(any(chk_rt$len > 1.2 * straight), "some routes are much longer than the straight line, as they should")
+
 # ---------------------------------------------------------------- export
 message("export")
 fake_ttm <- purrr::set_names(purrr::map(tp$scen$id, function(w) {
@@ -163,6 +181,8 @@ fake_ttm <- purrr::set_names(purrr::map(tp$scen$id, function(w) {
     select(hub, place, p50, p75, trips, changes, best, last_back)
 }), tp$scen$id)
 out <- export_app_data(cfg, prof, acc, tp, fake_ttm, ep$dem)
+export_routes(rt, out)
+ok(length(list.files(file.path(out, "routes"))) == dplyr::n_distinct(rt$climb), "one route file per climb")
 js <- purrr::map(c("meta", "stations", "ttm", "climbs", "access"), function(n) jsonlite::read_json(file.path(out, paste0(n, ".json"))))
 ok(length(js[[4]]) == nrow(prof), "climbs.json has every climb")
 ok(length(js[[3]]$order) == length(js[[2]]$stations), "ttm order = stations")

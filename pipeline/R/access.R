@@ -9,8 +9,17 @@ walk_graph <- function(net) {
   ids <- sort(unique(c(e$from, e$to)))
   g <- igraph::make_graph(rbind(match(e$from, ids), match(e$to, ids)), n = length(ids), directed = FALSE)
   igraph::E(g)$len <- e$len
+  igraph::E(g)$edge <- e$edge
   xy <- net$nodes[match(ids, net$nodes$node), c("x", "y")]
-  list(g = g, ids = ids, x = xy$x, y = xy$y)
+  list(g = g, ids = ids, x = xy$x, y = xy$y, from = e$from)
+}
+
+# the nearest junction of the walking network to each place
+snap_places <- function(W, places, crs) {
+  P <- sf::st_as_sf(places, coords = c("x", "y"), crs = crs, remove = FALSE)
+  N <- sf::st_as_sf(tibble::tibble(v = seq_along(W$ids), x = W$x, y = W$y), coords = c("x", "y"), crs = crs)
+  nn <- sf::st_nearest_feature(P, N)
+  tibble::tibble(place = places$id, v = nn, snap = sqrt((places$x - W$x[nn])^2 + (places$y - W$y[nn])^2))
 }
 
 access_table <- function(net, prof, places, cfg) {
@@ -25,10 +34,7 @@ access_table <- function(net, prof, places, cfg) {
   E <- sf::st_as_sf(tibble::tibble(x = W$x[ends$v], y = W$y[ends$v]), coords = c("x", "y"), crs = cfg$crs)
   P <- P[lengths(sf::st_is_within_distance(P, E, maxd)) > 0, ]
   if (!nrow(P)) return(tibble::tibble(climb = character(), place = character(), d0 = integer(), d1 = integer()))
-  N <- sf::st_as_sf(tibble::tibble(v = seq_along(W$ids), x = W$x, y = W$y), coords = c("x", "y"), crs = cfg$crs)
-  nn <- sf::st_nearest_feature(P, N)
-  snap <- sqrt((P$x - W$x[nn])^2 + (P$y - W$y[nn])^2)
-  P <- tibble::tibble(place = P$id, v = nn, snap = snap) |> dplyr::filter(snap <= cfg$access$max_snap_m)
+  P <- snap_places(W, sf::st_drop_geometry(P), cfg$crs) |> dplyr::filter(snap <= cfg$access$max_snap_m)
   say("walking: %d places \u00d7 %d climb ends", nrow(P), nrow(ends))
 
   src <- unique(P$v)
@@ -53,4 +59,93 @@ access_table <- function(net, prof, places, cfg) {
   check_unique(out, c("climb", "place"), "access rows")
   say("access: %d climb\u2013place pairs, %d climbs reachable on foot from a stop", nrow(out), dplyr::n_distinct(out$climb))
   out
+}
+
+# ------------------------------------------------------------------
+# The walking routes themselves, to draw them in the app: from each of
+# the k closest stops to the bottom (b) and to the top (t) of each climb,
+# along the same network as the distances. One small file per climb,
+# fetched when the climb is opened.
+# ------------------------------------------------------------------
+access_paths <- function(net, acc, prof, places, cfg, ttm = NULL, hubs = NULL, k = 5, tol = 5) {
+  W <- walk_graph(net)
+  ends <- dplyr::select(prof, climb = id, start, end)
+  sides <- dplyr::bind_rows(
+    dplyr::transmute(acc, climb, place, side = "b", d = d0),
+    dplyr::transmute(acc, climb, place, side = "t", d = d1)) |>
+    dplyr::filter(is.finite(d), d <= cfg$access$max_walk_m)
+  # the k closest stops...
+  near <- sides |>
+    dplyr::group_by(climb, side) |>
+    dplyr::slice_min(d, n = k, with_ties = FALSE) |>
+    dplyr::ungroup()
+  # ...plus the hubs themselves (you can walk from the station you start at)
+  # and, for each hub and window, the stop the app picks by default
+  # (soonest: train/coach minutes + walking at 6 min/km, with a way back)
+  extra <- NULL
+  if (!is.null(hubs)) extra <- dplyr::filter(sides, place %in% hubs$id)
+  if (!is.null(ttm)) {
+    tt <- dplyr::bind_rows(ttm, .id = "window") |>
+      dplyr::filter(!is.na(last_back)) |>
+      dplyr::select(window, hub, place, p50)
+    if (!is.null(hubs)) tt <- dplyr::bind_rows(tt, tidyr::expand_grid(window = names(ttm), hub = hubs$id) |> dplyr::mutate(place = hub, p50 = 0))
+    best <- sides |>
+      dplyr::inner_join(tt, by = "place", relationship = "many-to-many") |>
+      dplyr::mutate(score = p50 + d / 1000 * 6) |>
+      dplyr::group_by(climb, side, hub, window) |>
+      dplyr::slice_min(score, n = 1, with_ties = FALSE) |>
+      dplyr::ungroup() |>
+      dplyr::select(climb, place, side, d)
+    extra <- dplyr::bind_rows(extra, best)
+  }
+  pairs <- dplyr::bind_rows(near, extra) |>
+    dplyr::distinct(climb, place, side, .keep_all = TRUE) |>
+    dplyr::inner_join(ends, by = "climb") |>
+    dplyr::mutate(node = dplyr::if_else(side == "b", start, end), tv = match(node, W$ids)) |>
+    dplyr::select(climb, place, side, d, tv)
+  snaps <- snap_places(W, dplyr::filter(places, id %in% pairs$place), cfg$crs)
+  say("walking routes: %d stop-to-climb routes from %d stops", nrow(pairs), nrow(snaps))
+
+  # shortest paths, stop by stop: the edges in order, and which way each is walked
+  steps <- purrr::map(split(pairs, pairs$place), function(p) {
+    v <- snaps$v[snaps$place == p$place[1]]
+    tv <- unique(p$tv)
+    sp <- suppressWarnings(igraph::shortest_paths(W$g, from = v, to = tv, weights = igraph::E(W$g)$len, output = "both"))
+    purrr::map2(sp$vpath, sp$epath, function(vp, ep) {
+      vp <- as.integer(vp); ep <- as.integer(ep)
+      if (!length(ep)) return(NULL)
+      tibble::tibble(place = p$place[1], tv = vp[length(vp)], ord = seq_along(ep), ge = ep,
+                     rev = W$from[ep] != W$ids[vp[-length(vp)]])
+    }) |> dplyr::bind_rows()
+  }) |> dplyr::bind_rows() |>
+    dplyr::mutate(edge = igraph::E(W$g)$edge[ge], route = dplyr::consecutive_id(place, tv))
+
+  # full geometry: each edge's vertices, reversed when walked backwards
+  verts <- net$verts |> dplyr::filter(edge %in% unique(steps$edge))
+  pts <- steps |>
+    dplyr::select(route, ord, edge, rev) |>
+    dplyr::inner_join(verts, by = "edge", relationship = "many-to-many") |>
+    dplyr::mutate(o2 = dplyr::if_else(rev, -s, s)) |>
+    dplyr::arrange(route, ord, o2) |>
+    dplyr::group_by(route) |>
+    dplyr::filter(!(x == dplyr::lag(x, default = -1) & y == dplyr::lag(y, default = -1))) |>
+    dplyr::ungroup()
+  keys <- dplyr::distinct(steps, route, place, tv)
+  # from the stop itself (a few metres to the network) to the climb end
+  stop_xy <- dplyr::filter(places, id %in% keys$place) |> dplyr::select(place = id, x, y)
+  pts <- dplyr::bind_rows(keys |> dplyr::inner_join(stop_xy, by = "place") |> dplyr::transmute(route, ord = 0L, x, y),
+                          dplyr::select(pts, route, ord, x, y)) |>
+    dplyr::arrange(route, ord)
+  # lighter lines (5 m tolerance), then lon/lat
+  lines <- split(as.matrix(pts[, c("x", "y")]), pts$route)
+  geoms <- sf::st_sfc(lapply(lines, function(v) sf::st_linestring(matrix(v, ncol = 2))), crs = cfg$crs) |>
+    sf::st_simplify(dTolerance = tol) |>
+    sf::st_transform(4326)
+  routes <- keys |>
+    dplyr::arrange(route) |>
+    dplyr::mutate(coords = lapply(geoms, sf::st_coordinates)) |>
+    dplyr::inner_join(pairs, by = c("place", "tv"), relationship = "many-to-many")
+  check_unique(routes, c("climb", "side", "place"), "walking routes")
+  say("walking routes: %d drawn, median %.0f points", nrow(routes), stats::median(vapply(routes$coords, nrow, 0L)))
+  routes |> dplyr::select(climb, side, place, d, coords)
 }
