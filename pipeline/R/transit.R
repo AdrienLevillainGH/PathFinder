@@ -89,6 +89,14 @@ last_departure <- function(e, max_walk = 20, window_end = 24L * 60L) {
   dplyr::bind_rows(ride, on_foot)
 }
 
+# r5r says "less than 20 % of the services run on that date" for every
+# call: expected with the national SNCF file, so not shown
+quiet_r5r <- function(expr) {
+  withCallingHandlers(expr,
+    message = function(m) if (grepl("20%", conditionMessage(m), fixed = TRUE)) invokeRestart("muffleMessage"),
+    warning = function(w) if (grepl("20%", conditionMessage(w), fixed = TRUE)) invokeRestart("muffleWarning"))
+}
+
 r5r_core <- function(cfg, tp, pbf = NULL) {
   if (!requireNamespace("r5r", quietly = TRUE))
     stop("r5r is not installed: install.packages('r5r'), and Java 21 (see pipeline/README.md)", call. = FALSE)
@@ -116,17 +124,17 @@ transit_times <- function(cfg, tp, places_near, pbf = NULL) {
       if (is.null(core)) core <- r5r_core(cfg, tp, pbf)
       at <- function(m) as.POSIXct(sprintf("%s %02d:%02d:00", s$date, m %/% 60, m %% 60), tz = cfg$timezone)
       say("%s %s: %d hubs \u2192 %d places", s$id, s$date, nrow(hubs), nrow(dest))
-      fw <- r5r::expanded_travel_time_matrix(core, origins = hubs, destinations = dest, mode = c("WALK", "TRANSIT"),
+      fw <- quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = hubs, destinations = dest, mode = c("WALK", "TRANSIT"),
                                              departure_datetime = at(s$out_start), time_window = s$out_end - s$out_start,
                                              max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
-                                             walk_speed = tr$walk_speed_kmh, progress = FALSE) |>
+                                             walk_speed = tr$walk_speed_kmh, progress = FALSE)) |>
         norm_expanded() |> trip_summary(tr$max_walk_min)
       chunks <- split(dest, ceiling(seq_len(nrow(dest)) / 200))
       bk <- purrr::map(chunks, function(ch)
-        r5r::expanded_travel_time_matrix(core, origins = ch, destinations = hubs, mode = c("WALK", "TRANSIT"),
+        quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = ch, destinations = hubs, mode = c("WALK", "TRANSIT"),
                                          departure_datetime = at(s$back_start), time_window = s$back_end - s$back_start,
                                          max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
-                                         walk_speed = tr$walk_speed_kmh, progress = FALSE) |>
+                                         walk_speed = tr$walk_speed_kmh, progress = FALSE)) |>
           norm_expanded() |> last_departure(tr$max_walk_min, s$back_end)) |>
         dplyr::bind_rows()
       n0 <- nrow(fw)

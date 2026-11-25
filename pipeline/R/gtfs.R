@@ -178,10 +178,12 @@ gtfs_write <- function(g, file) {
   dir <- tempfile("gtfsw")
   dir.create(dir)
   on.exit(unlink(dir, recursive = TRUE), add = TRUE)
-  for (nm in names(g)) data.table::fwrite(g[[nm]], file.path(dir, paste0(nm, ".txt")), quote = "auto")
+  # empty optional tables (e.g. SNCF transfers once clipped) are left out
+  keep <- names(g)[vapply(names(g), function(nm) nrow(g[[nm]]) > 0 || nm %in% c("agency", "stops", "routes", "trips", "stop_times"), logical(1))]
+  for (nm in keep) data.table::fwrite(g[[nm]], file.path(dir, paste0(nm, ".txt")), quote = "auto")
   file <- normalizePath(file, mustWork = FALSE)
   if (file.exists(file)) unlink(file)
-  zip::zip(file, files = paste0(names(g), ".txt"), root = dir, mode = "cherry-pick")
+  zip::zip(file, files = paste0(keep, ".txt"), root = dir, mode = "cherry-pick")
   invisible(file)
 }
 
@@ -313,7 +315,9 @@ place_towns <- function(places, features, max_m = 2500) {
     j <- max.col(-d2, ties.method = "first")
     town[ch] <- ifelse(d2[cbind(seq_along(ch), j)] <= max_m^2, towns$name[j], NA_character_)
   }
-  named <- !is.na(town) & !mapply(function(t, n) grepl(t, n, fixed = TRUE), norm_name(town), norm_name(places$name))
-  places$name <- ifelse(places$kind == "coach" & named, paste0(town, " \u00b7 ", places$name), places$name)
+  # names that already start with a place in capitals ("KLINGENTHAL - Dreistein") are left alone
+  has_place <- grepl("^[[:upper:][:digit:]' -]{3,} - ", places$name)
+  named <- !is.na(town) & !has_place & !mapply(function(t, n) grepl(t, n, fixed = TRUE), norm_name(town), norm_name(places$name))
+  places$name <- unname(ifelse(places$kind == "coach" & named, paste0(town, " \u00b7 ", places$name), places$name))
   places
 }

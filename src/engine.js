@@ -197,14 +197,17 @@ export function runQuery(db, q, pace = 6) {
   const t0 = typeof performance !== "undefined" ? performance.now() : 0;
   const reach = new Map();               // station → train entry, within T max
   const reachLoose = new Map();          // within T max + 20 %, for near misses
+  let noBack = 0;
   for (const s of db.stations) {
     const t = train(db, q.origin, q.window, s.id);
     if (!t) continue;
+    // without a car: there must be a train or coach back the same day
+    if (q.roundTrip !== false && t[3] == null) { noBack++; continue; }
     if (t[0] <= q.maxTrain) reach.set(s.id, t);
     if (t[0] <= q.maxTrain * 1.2) reachLoose.set(s.id, t);
   }
 
-  const trace = { stations: db.stations.length, reach: reach.size, climbs: db.climbs.length,
+  const trace = { stations: db.stations.length, reach: reach.size, noBack, climbs: db.climbs.length,
                   nearStation: 0, matched: 0, dupes: 0, near: 0, ms: 0 };
   const results = [], near = [];
 

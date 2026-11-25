@@ -98,5 +98,22 @@ for (const p of PRESETS) for (const w of ["wd", "sat", "sun"]) for (const dir of
   check(a !== b, `origin changes the answer (stg ${a}, kru ${b})`);
 }
 
+// without a car: a stop with no train or coach back that evening is not used
+{
+  const raw2 = { meta: load("meta.json"), stations: load("stations.json"), ttm: load("ttm.json"),
+                 climbs: load("climbs.json"), access: load("access.json") };
+  const q = { ...DEFAULT_QUERY, preset: "g10", ...PRESETS.find((p) => p.id === "g10").terrain };
+  const before = runQuery(prepare(raw2), q, 6);
+  const used = before.results[0]?.station;
+  check(!!used, "g10 has a result to test the way back with");
+  if (used) {
+    const k = raw2.ttm.order.indexOf(used);
+    raw2.ttm.by[q.window][q.origin][k][3] = null;
+    const after = runQuery(prepare(raw2), q, 6);
+    check(after.results.every((r) => r.station !== used), "a stop with no way back is not used");
+    check(after.trace.noBack === 1, "…and counted");
+  }
+}
+
 console.log(fails ? `${fails} failures` : "all engine checks pass");
 process.exit(fails ? 1 : 0);

@@ -12,12 +12,14 @@ diag_theme <- function() {
                    legend.position = "bottom", plot.title.position = "plot", legend.key.width = ggplot2::unit(1.5, "cm"))
 }
 
+# a chart that fails is reported and skipped: it never stops a run
 diag_save <- function(p, cfg, name, w = 8, h = 8) {
   dir <- file.path(cfg$paths$out, "diag")
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
   f <- file.path(dir, name)
-  ggplot2::ggsave(f, p, width = w, height = h, dpi = 150, bg = "white")
-  f
+  ok <- tryCatch({ ggplot2::ggsave(f, p, width = w, height = h, dpi = 150, bg = "white"); TRUE },
+                 error = function(e) { warning("chart ", name, " not drawn: ", conditionMessage(e), call. = FALSE); FALSE })
+  if (ok) f else character()
 }
 
 diagnostics <- function(cfg, net, prof, acc = NULL, tp = NULL, ttm = NULL) {
@@ -85,7 +87,7 @@ diagnostics <- function(cfg, net, prof, acc = NULL, tp = NULL, ttm = NULL) {
     t5 <- ttm[[w]] |> dplyr::filter(hub == h$id) |> dplyr::inner_join(tp$places, by = c(place = "id"))
     p5 <- ggplot2::ggplot(t5, ggplot2::aes(km(x), km(y), colour = p50, shape = kind)) +
       ggplot2::geom_point(size = 1.6) +
-      ggplot2::scale_colour_viridis_c(option = "magma", direction = -1, name = "minutes") +
+      ggplot2::scale_colour_steps(low = "#F2E3B3", high = "#3B2A6B", breaks = c(15, 30, 45, 60, 90), name = "minutes") +
       ggplot2::scale_shape_manual(values = c(rail = 15, coach = 16), name = NULL) +
       ggplot2::coord_equal() + diag_theme() +
       ggplot2::labs(x = "x (km)", y = "y (km)", title = sprintf("From %s, window %s: on board + changes", h$name, w))
