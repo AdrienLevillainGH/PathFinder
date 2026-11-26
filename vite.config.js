@@ -18,8 +18,8 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "favicon-32.png", "apple-touch-icon.png", "icon-192.png", "icon-512.png"],
       manifest: {
-        name: "PathFinder",
-        short_name: "PathFinder",
+        name: "Chouca",
+        short_name: "Chouca",
         description: "Trail-running segments by terrain and by train",
         start_url: ".",
         scope: ".",
