@@ -72,6 +72,7 @@ transit:
       url: https://transport.data.gouv.fr/resources/83635/download
       page: https://transport.data.gouv.fr/datasets/offre-du-reseau-de-transport-interurbain-fluo-grand-est
       exclude: null
+  modes: [rail, coach]             # besides "train + coach": also train only, coach only
   max_age_days: 7                  # re-download timetables older than this
   stop_merge_m: 150                # stop points closer than this become one place
   hubs: [Strasbourg, Molsheim, Obernai, Sélestat, Colmar, Mulhouse, Saverne, Haguenau, Wissembourg, Saint-Louis]

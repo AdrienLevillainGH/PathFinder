@@ -34,6 +34,8 @@ export const PRESETS = [
 export const DEFAULT_QUERY = {
   origin: "stg",
   window: "sat",
+  transit: "all",        // "all" train + coach · "rail" train only · "coach" coach only
+  showNear: false,       // list the near misses (what each one is missing)
   maxTrain: 60,          // minutes, station to station
   maxApproach: 5000,     // metres, station to the start of the stretch
   dir: "up",             // "up" climbs, "down" descents
@@ -173,6 +175,15 @@ function series(z, sign, wayE, surfE) {
 
 /* ---------- access ---------- */
 
+// the times a search reads: "<window>" for train + coach, "<window>@rail"
+// (train only) or "<window>@coach" (coach only)
+export const TRANSIT = [
+  { id: "all", label: "Train + coach", short: "train + coach" },
+  { id: "rail", label: "Train only", short: "train" },
+  { id: "coach", label: "Coach only", short: "coach" },
+];
+export const tkey = (q) => (!q.transit || q.transit === "all" ? q.window : `${q.window}@${q.transit}`);
+
 export function trainRow(db, origin, window) {
   return db.ttm.by[window]?.[origin] || [];
 }
@@ -242,7 +253,7 @@ export function runQuery(db, q, pace = 6) {
   const reachLoose = new Map();          // within T max + 20 %, for near misses
   let noBack = 0;
   for (const s of db.stations) {
-    const t = train(db, q.origin, q.window, s.id);
+    const t = train(db, q.origin, tkey(q), s.id);
     if (!t) continue;
     // without a car: there must be a train or coach back the same day
     if (q.roundTrip !== false && t[3] == null) { noBack++; continue; }
@@ -383,7 +394,7 @@ export function focusClimb(db, id, q, pace = 6) {
   if (!c) return null;
   const reach = new Map();
   for (const s of db.stations) {
-    const t = train(db, q.origin, q.window, s.id);
+    const t = train(db, q.origin, tkey(q), s.id);
     if (t) reach.set(s.id, t);
   }
   const entries = c.access.map(([sid, d0, d1]) => ({ sid, entry: q.dir === "down" ? d1 : d0 })).filter((e) => reach.has(e.sid));

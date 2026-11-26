@@ -1,6 +1,6 @@
 // Engine checks: run with `npm test`. Brute force is the referee.
 import { readFileSync } from "node:fs";
-import { prepare, runQuery, searchClimb, implied, DEFAULT_QUERY, PRESETS, footprint, overlap } from "../src/engine.js";
+import { prepare, runQuery, searchClimb, implied, DEFAULT_QUERY, PRESETS, footprint, overlap, tkey } from "../src/engine.js";
 
 const load = (f) => JSON.parse(readFileSync(new URL(`./fixtures/demo/${f}`, import.meta.url)));
 const db = prepare({ meta: load("meta.json"), stations: load("stations.json"), ttm: load("ttm.json"),
@@ -113,6 +113,25 @@ for (const p of PRESETS) for (const w of ["wd", "sat", "sun"]) for (const dir of
     check(after.results.every((r) => r.station !== used), "a stop with no way back is not used");
     check(after.trace.noBack === 1, "…and counted");
   }
+}
+
+// transport choice: "train only" reads its own times ("<window>@rail")
+{
+  const raw3 = { meta: load("meta.json"), stations: load("stations.json"), ttm: load("ttm.json"),
+                 climbs: load("climbs.json"), access: load("access.json") };
+  const q = { ...DEFAULT_QUERY, preset: "g10", ...PRESETS.find((p) => p.id === "g10").terrain };
+  const all = runQuery(prepare(raw3), q, 6);
+  const used = all.results[0]?.station;
+  // a made-up train-only table: same times, minus the stop the best result uses
+  const row = raw3.ttm.by[q.window][q.origin].slice();
+  row[raw3.ttm.order.indexOf(used)] = null;
+  raw3.ttm.by[`${q.window}@rail`] = { [q.origin]: row };
+  const db3 = prepare(raw3);
+  check(tkey(q) === q.window && tkey({ ...q, transit: "rail" }) === `${q.window}@rail`, "times key: window, or window@mode");
+  const rail = runQuery(db3, { ...q, transit: "rail" }, 6);
+  check(rail.results.length > 0 && rail.results.every((r) => r.station !== used), "train only: stops it cannot reach are not used");
+  check(runQuery(db3, { ...q, transit: "all" }, 6).results.length === all.results.length, "train + coach: unchanged");
+  check(runQuery(db3, { ...q, transit: "coach" }, 6).results.length === 0, "a choice the data does not have finds nothing (the app falls back)");
 }
 
 console.log(fails ? `${fails} failures` : "all engine checks pass");

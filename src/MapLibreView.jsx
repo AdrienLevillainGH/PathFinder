@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Plus, Minus, LocateFixed, Maximize2, Layers, Check } from "lucide-react";
+import { Layers, Check } from "lucide-react";
 import { along } from "./geo.js";
 import { fmtKm } from "./engine.js";
 import { BASES, OVERLAYS, baseStyle, applyLayers, credits, circle } from "./basemap.js";
@@ -144,7 +144,7 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
     const R = q.maxApproach;
     map.getSource("reach").setData(fc(!layers.reach ? [] : db.stations.filter((s) => run.reach.has(s.id) || s.id === q.origin)
       .map((s) => ({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [circle(s.lon, s.lat, R)] } }))));
-    map.getSource("near").setData(fc(!showAll ? [] : run.near.map((r) => line(along(r.climb, r.dir).coords.slice(r.i, r.j + 1)))));
+    map.getSource("near").setData(fc(!showAll || !q.showNear ? [] : run.near.map((r) => line(along(r.climb, r.dir).coords.slice(r.i, r.j + 1)))));
     const shown = showAll ? [...run.results.filter((r) => r.id !== selected), ...(sel ? [sel] : [])] : sel ? [sel] : [];
     map.getSource("results").setData(fc(shown.map((r) => line(along(r.climb, r.dir).coords.slice(r.i, r.j + 1), { id: r.id, sel: r.id === selected ? 1 : 0 }))));
     map.getSource("approach").setData(fc(appr ? [line(appr.coords, { real: appr.real ? 1 : 0 })] : []));
@@ -177,7 +177,7 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
       el.addEventListener("click", (e) => { e.stopPropagation(); onSelectRef.current?.(r.id); });
       markers.current.push(new maplibregl.Marker({ element: el }).setLngLat(along(r.climb, r.dir).coords[r.i]).addTo(map));
     }
-  }, [ready, run, selected, q.origin, q.maxApproach, theme, showAll, layers.trains, layers.coaches, layers.reach, walk, exact, appr?.coords.length, appr?.real]);
+  }, [ready, run, selected, q.origin, q.maxApproach, q.showNear, theme, showAll, layers.trains, layers.coaches, layers.reach, walk, exact, appr?.coords.length, appr?.real]);
 
   // a new search, a new selection or a route that arrives reframes the map
   // (with all the matches shown, only a new search does)
@@ -239,10 +239,6 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
         )}
         <div className="dl-float flex flex-col overflow-hidden rounded-xl">
           {btn(Layers, "Map layers", () => setPicker(!picker))}
-          {btn(Plus, "Zoom in", () => { userMoved.current = true; map?.zoomIn(); })}
-          {btn(Minus, "Zoom out", () => { userMoved.current = true; map?.zoomOut(); })}
-          {btn(LocateFixed, "Back to the match", () => { map && fitResults(map, true); onMoved?.(null); })}
-          {btn(Maximize2, "Whole region", () => { userMoved.current = true; map?.fitBounds([[6.85, 47.7], [8.1, 49.1]], { padding: { top: pad.top, bottom: pad.bottom, left: 20, right: 60 } }); })}
         </div>
       </div>
     </div>

@@ -52,6 +52,10 @@ norm_expanded <- function(x) {
 # r5r also returns walk-only journeys (any length up to max_trip_duration,
 # whatever max_walk_time says): they count only when no train or coach
 # does it and the walk is short (<= max_walk minutes): then trips = 99.
+# dplyr tries a summary once on an empty table to learn its types, and
+# min()/max() warn there (e.g. coach only, where nothing may run): skip it
+if_rows <- function(d, empty, f) if (nrow(d)) f(d) else empty
+
 trip_summary <- function(e, max_walk = 20) {
   g <- e |>
     dplyr::mutate(arr = dep + total) |>
@@ -60,16 +64,15 @@ trip_summary <- function(e, max_walk = 20) {
     dplyr::mutate(dur = arr - dep,
                   walk = is.na(routes) | routes == "" | grepl("WALK", routes, fixed = TRUE),
                   changes = dplyr::if_else(walk, 0L, lengths(strsplit(routes, "|", fixed = TRUE)) - 1L))
-  ride <- g |>
-    dplyr::filter(!walk) |>
+  none <- tibble::tibble(from = character(), to = character(), p50 = numeric(), p75 = numeric(),
+                         trips = integer(), changes = integer(), best = numeric())
+  ride <- if_rows(dplyr::filter(g, !walk), none, function(d) d |>
     dplyr::group_by(from, to) |>
     dplyr::summarise(p50 = round(stats::median(dur)), p75 = round(stats::quantile(dur, 0.75, names = FALSE)),
-                     trips = dplyr::n(), changes = as.integer(round(stats::median(changes))), best = min(dur), .groups = "drop")
-  on_foot <- g |>
-    dplyr::filter(walk, dur <= max_walk) |>
-    dplyr::anti_join(ride, by = c("from", "to")) |>
+                     trips = dplyr::n(), changes = as.integer(round(stats::median(changes))), best = min(dur), .groups = "drop"))
+  on_foot <- if_rows(dplyr::filter(g, walk, dur <= max_walk) |> dplyr::anti_join(ride, by = c("from", "to")), none, function(d) d |>
     dplyr::group_by(from, to) |>
-    dplyr::summarise(p50 = round(min(dur)), p75 = round(min(dur)), trips = 99L, changes = 0L, best = min(dur), .groups = "drop")
+    dplyr::summarise(p50 = round(min(dur)), p75 = round(min(dur)), trips = 99L, changes = 0L, best = min(dur), .groups = "drop"))
   dplyr::bind_rows(ride, on_foot)
 }
 
@@ -77,10 +80,9 @@ trip_summary <- function(e, max_walk = 20) {
 # (a short walk counts as "any time": the end of the window)
 last_departure <- function(e, max_walk = 20, window_end = 24L * 60L) {
   e <- dplyr::mutate(e, walk = is.na(routes) | routes == "" | grepl("WALK", routes, fixed = TRUE))
-  ride <- e |>
-    dplyr::filter(!walk) |>
+  ride <- if_rows(dplyr::filter(e, !walk), tibble::tibble(from = character(), to = character(), last = integer()), function(d) d |>
     dplyr::group_by(from, to) |>
-    dplyr::summarise(last = max(dep), .groups = "drop")
+    dplyr::summarise(last = max(dep), .groups = "drop"))
   on_foot <- e |>
     dplyr::filter(walk, total <= max_walk) |>
     dplyr::distinct(from, to) |>
@@ -105,33 +107,63 @@ r5r_core <- function(cfg, tp, pbf = NULL) {
   unlink(list.files(dir, pattern = "\\.(zip|pbf)$", full.names = TRUE))
   if (is.null(pbf)) pbf <- osm_files(cfg, cfg$osm$r5r_extract)
   file.copy(pbf, file.path(dir, basename(pbf)), overwrite = TRUE)
-  for (f in tp$feeds) gtfs_write(f$g, file.path(dir, paste0(f$id, ".zip")))
+  coach <- purrr::map_chr(cfg$transit$feeds, function(f) f$coach_stops %||% "") |> stats::setNames(purrr::map_chr(cfg$transit$feeds, "id"))
+  for (f in tp$feeds) gtfs_write(gtfs_split_coaches(f$g, coach[[f$id]]), file.path(dir, paste0(f$id, ".zip")))
   say("r5r: building the network (a few minutes the first time)")
   ns <- getNamespaceExports("r5r")
   if ("build_network" %in% ns) r5r::build_network(dir, verbose = FALSE, overwrite = TRUE) else r5r::setup_r5(dir, verbose = FALSE, overwrite = TRUE)
 }
 
+# What each transport choice may use. "all" = any train or coach; the
+# others are routed separately (a train-only trip is not simply the
+# fastest trip that happens to use a train). Tram-trains count as trains.
+TRANSIT_MODES <- list(all = c("WALK", "TRANSIT"), rail = c("WALK", "RAIL", "TRAM"), coach = c("WALK", "BUS"))
+
+# Which places count for a transport choice. Train only: stations (you get
+# off the train there, and everything after is the walk to the climb, drawn
+# and counted). Coach only: places a coach stops at. The starting stations
+# always count (you can walk from where you start).
+mode_places <- function(tp, cfg, m) {
+  if (m == "all") return(tp$places$id)
+  if (m == "rail") return(union(tp$places$id[tp$places$kind == "rail"], tp$hubs$id))
+  feeds <- purrr::map_chr(tp$feeds, "id")
+  has_rail <- purrr::map_lgl(tp$feeds, function(f) any(col_or(f$g$routes, "route_type") %in% c("0", "2", as.character(100:117)))) |> stats::setNames(feeds)
+  coach_re <- purrr::map_chr(cfg$transit$feeds, function(f) f$coach_stops %||% "") |> stats::setNames(purrr::map_chr(cfg$transit$feeds, "id"))
+  mb <- tp$members
+  re <- coach_re[mb$feed]
+  is_coach <- !has_rail[mb$feed] | (!is.na(re) & nzchar(re) & mapply(function(p, s) grepl(p, s, perl = TRUE), re, mb$stop_id))
+  union(unique(mb$place[is_coach]), tp$hubs$id)
+}
+
+# Returns one table per window and transport choice, named "<window>" for
+# "all" and "<window>@<mode>" for the others (cfg$transit$modes).
 transit_times <- function(cfg, tp, places_near, pbf = NULL) {
   options(java.parameters = paste0("-Xmx", cfg$transit$java_memory %||% "8G"))
   tr <- cfg$transit
+  modes <- unique(c("all", unlist(tr$modes)))
+  bad <- setdiff(modes, names(TRANSIT_MODES))
+  if (length(bad)) stop("transit: unknown modes ", paste(bad, collapse = ", "), " (use rail, coach)", call. = FALSE)
   hubs <- dplyr::transmute(tp$hubs, id, lat, lon)
   dest <- dplyr::filter(tp$places, id %in% places_near) |> dplyr::transmute(id, lat, lon)
   core <- NULL
   out <- list()
-  for (k in seq_len(nrow(tp$scen))) {
+  for (m in modes) for (k in seq_len(nrow(tp$scen))) {
     s <- tp$scen[k, ]
-    out[[s$id]] <- cached(work_file(cfg, sprintf("ttm_%s_%s.rds", s$id, s$date)), {
+    key <- if (m == "all") s$id else paste0(s$id, "@", m)
+    keep <- mode_places(tp, cfg, m)
+    file <- if (m == "all") sprintf("ttm_%s_%s.rds", s$id, s$date) else sprintf("ttm_%s_%s_%s.rds", m, s$id, s$date)
+    out[[key]] <- cached(work_file(cfg, file), {
       if (is.null(core)) core <- r5r_core(cfg, tp, pbf)
       at <- function(m) as.POSIXct(sprintf("%s %02d:%02d:00", s$date, m %/% 60, m %% 60), tz = cfg$timezone)
-      say("%s %s: %d hubs \u2192 %d places", s$id, s$date, nrow(hubs), nrow(dest))
-      fw <- quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = hubs, destinations = dest, mode = c("WALK", "TRANSIT"),
+      say("%s %s (%s): %d hubs \u2192 %d places", s$id, s$date, m, nrow(hubs), nrow(dest))
+      fw <- quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = hubs, destinations = dest, mode = TRANSIT_MODES[[m]],
                                              departure_datetime = at(s$out_start), time_window = s$out_end - s$out_start,
                                              max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
                                              walk_speed = tr$walk_speed_kmh, progress = FALSE)) |>
         norm_expanded() |> trip_summary(tr$max_walk_min)
       chunks <- split(dest, ceiling(seq_len(nrow(dest)) / 200))
       bk <- purrr::map(chunks, function(ch)
-        quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = ch, destinations = hubs, mode = c("WALK", "TRANSIT"),
+        quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = ch, destinations = hubs, mode = TRANSIT_MODES[[m]],
                                          departure_datetime = at(s$back_start), time_window = s$back_end - s$back_start,
                                          max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
                                          walk_speed = tr$walk_speed_kmh, progress = FALSE)) |>
@@ -143,7 +175,8 @@ transit_times <- function(cfg, tp, places_near, pbf = NULL) {
         dplyr::rename(hub = from, place = to, last_back = last)
       check_rows(n0, nrow(res), "trips out + last back", allow_drop = FALSE)
       res
-    })
+    }) |>
+      dplyr::filter(place %in% keep)
   }
   if (!is.null(core)) try(r5r::stop_r5(core), silent = TRUE)
   out

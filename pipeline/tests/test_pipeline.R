@@ -142,6 +142,15 @@ tmp_zip <- file.path(root, "roundtrip.zip")
 gtfs_write(tp$feeds[[2]]$g, tmp_zip)
 rt <- gtfs_read(tmp_zip)
 ok(identical(rt$stop_times, tp$feeds[[2]]$g$stop_times), "GTFS write \u2192 read round trip")
+# SNCF-style replacement coaches filed under a rail line get a coach line
+mini <- list(routes = tibble::tibble(route_id = "L1", route_short_name = "TER 1", route_type = "2"),
+             trips = tibble::tibble(route_id = "L1", trip_id = c("train", "car")),
+             stop_times = tibble::tibble(trip_id = c("train", "train", "car", "car"),
+                                         stop_id = c("OCETrain TER-1", "OCETrain TER-2", "OCECar TER-1", "OCECar TER-2")))
+sp <- gtfs_split_coaches(mini, "OCECar")
+ok(identical(sp$trips$route_id, c("L1", "L1:coach")) && identical(sp$routes$route_type, c("2", "3")) &&
+     identical(sp$routes$route_short_name, c("TER 1", "TER 1")), "replacement coaches moved to a coach line; trains unchanged")
+ok(identical(gtfs_split_coaches(mini, NULL), mini), "no coach-stop pattern: feed unchanged")
 
 # ---------------------------------------------------------------- access
 message("access")
@@ -152,9 +161,21 @@ chk <- acc |> inner_join(pl, by = "place") |> inner_join(prof |> select(climb = 
   mutate(euclid = sqrt((px - xs)^2 + (py - ys)^2))
 ok(all(chk$d0[is.finite(chk$d0) & chk$d0 < 99999] >= chk$euclid[is.finite(chk$d0) & chk$d0 < 99999] - 1), "walking \u2265 straight line")
 
+# made-up times (train + coach, and train only), for the routes and the export
+fake_ttm <- purrr::set_names(purrr::map(tp$scen$id, function(w) {
+  tidyr::expand_grid(hub = tp$hubs$id, place = unique(c(acc$place, tp$hubs$id))) |>
+    left_join(select(tp$places, hub = id, hx = x, hy = y), by = "hub") |>
+    left_join(select(tp$places, place = id, x, y), by = "place") |>
+    mutate(p50 = round(5 + sqrt((x - hx)^2 + (y - hy)^2) / 1000 * 1.5), p75 = p50 + 5L, trips = 2L, changes = 0L,
+           best = p50, last_back = 19L * 60L + 30L) |>
+    select(hub, place, p50, p75, trips, changes, best, last_back)
+}), tp$scen$id)
+# train only: no coach stops (keys "<window>@<mode>")
+for (w in tp$scen$id) fake_ttm[[paste0(w, "@rail")]] <- dplyr::filter(fake_ttm[[w]], place %in% tp$places$id[tp$places$kind == "rail"])
+
 # ---------------------------------------------------------------- walking routes
 message("walking routes")
-rt <- access_paths(net2, acc, prof, tp$places, cfg)
+rt <- access_paths(net2, acc, prof, tp$places, cfg, fake_ttm, tp$hubs)
 ok(nrow(rt) > 0, sprintf("%d routes drawn", nrow(rt)))
 chk_rt <- rt |>
   dplyr::mutate(m = purrr::map(coords, function(m) to_metric(m[, 1], m[, 2], 2154)),
@@ -169,17 +190,18 @@ ok(all(sqrt((chk_rt$x1 - chk_rt$ex)^2 + (chk_rt$y1 - chk_rt$ey)^2) < 1), "…and
 ok(all(abs(chk_rt$len - chk_rt$d) < 0.02 * chk_rt$d + 10), "drawn length = the walking distance used for the filters (not a straight line)")
 straight <- sqrt((chk_rt$px - chk_rt$ex)^2 + (chk_rt$py - chk_rt$ey)^2)
 ok(any(chk_rt$len > 1.2 * straight), "some routes are much longer than the straight line, as they should")
+rt_more <- access_paths(net2, acc, prof, tp$places, cfg, fake_ttm, tp$hubs, known = rt[-(1:3), ])
+ok(nrow(rt_more) == nrow(rt) && nrow(dplyr::anti_join(rt, rt_more, by = c("climb", "side", "place"))) == 0,
+   "walking routes: only the missing ones are added to those already drawn")
+rt_b <- access_paths(net2, acc, prof, tp$places, cfg, fake_ttm, tp$hubs, batch_n = 40)
+rt_b <- dplyr::arrange(rt_b, climb, side, place); rt_s <- dplyr::arrange(rt, climb, side, place)
+ok(identical(rt_b[, c("climb", "side", "place", "d")], rt_s[, c("climb", "side", "place", "d")]) && identical(rt_b$coords, rt_s$coords),
+   "walking routes drawn in small batches: the same routes")
+same <- dplyr::inner_join(rt[1:3, ], rt_more, by = c("climb", "side", "place"))
+ok(all(purrr::map2_lgl(same$coords.x, same$coords.y, identical)), "...and they come out the same")
 
 # ---------------------------------------------------------------- export
 message("export")
-fake_ttm <- purrr::set_names(purrr::map(tp$scen$id, function(w) {
-  tidyr::expand_grid(hub = tp$hubs$id, place = unique(c(acc$place, tp$hubs$id))) |>
-    left_join(select(tp$places, hub = id, hx = x, hy = y), by = "hub") |>
-    left_join(select(tp$places, place = id, x, y), by = "place") |>
-    mutate(p50 = round(5 + sqrt((x - hx)^2 + (y - hy)^2) / 1000 * 1.5), p75 = p50 + 5L, trips = 2L, changes = 0L,
-           best = p50, last_back = 19L * 60L + 30L) |>
-    select(hub, place, p50, p75, trips, changes, best, last_back)
-}), tp$scen$id)
 out <- export_app_data(cfg, prof, acc, tp, fake_ttm, ep$dem, rt)
 meta <- jsonlite::read_json(file.path(out, "meta.json"))
 st <- jsonlite::read_json(file.path(out, "stations.json"))
@@ -187,8 +209,13 @@ tiles <- purrr::map(list.files(file.path(out, "tiles"), full.names = TRUE), json
 ok(meta$climb_format == "tiles1" && length(meta$tiles) == length(tiles), sprintf("by area: %d tiles", length(tiles)))
 ok(sum(purrr::map_int(tiles, function(t) length(t$climbs))) == nrow(prof), "every climb in exactly one tile")
 ok(length(list.files(file.path(out, "climbs"))) == nrow(prof), "one detail file (exact line + walking routes) per climb")
-ok(length(list.files(file.path(out, "ttm"))) == nrow(tp$hubs), "one travel-time file per starting station")
-tt <- jsonlite::read_json(list.files(file.path(out, "ttm"), full.names = TRUE)[1])
+ok(length(list.files(file.path(out, "ttm"))) == 2 * nrow(tp$hubs), "one travel-time file per starting station and transport choice")
+ok(identical(unlist(meta$modes), c("all", "rail")) && length(meta$windows) == nrow(tp$scen), "meta: transport choices listed; windows unchanged")
+tt <- jsonlite::read_json(file.path(out, "ttm", paste0(tp$hubs$id[1], ".json")))
+tr <- jsonlite::read_json(file.path(out, "ttm", paste0(tp$hubs$id[1], ".rail.json")))
+ok(identical(names(tr$by), tp$scen$id) && tr$mode == "rail", "train-only file: every window")
+coach_pos <- which(purrr::map_chr(st$stations, "kind") == "coach")
+ok(length(coach_pos) > 0 && all(purrr::map_lgl(tr$by$sat[coach_pos], is.null)), "train only: coach stops unreachable")
 ok(length(tt$order) == length(st$stations) && all(lengths(tt$by) == length(st$stations)), "travel times: one cell per stop")
 idx <- jsonlite::read_json(file.path(out, "index.json"))
 ok(setequal(names(idx), prof$id), "index: every climb has its tile")
@@ -216,11 +243,20 @@ if (requireNamespace("r5r", quietly = TRUE) && isTRUE(java_major() >= 21) && nzc
   ok(nrow(col_sum) == 1 && col_sum$changes == 1 && col_sum$trips == 1,
      sprintf("July Saturday: train + summer coach to Col du Test (%s min, %d change)", col_sum$p50, col_sum$changes))
   ok(nrow(dplyr::filter(summer, place == "r87000002")) == 1, "July Saturday: borrowed train days are routed")
+  # transport choices (alsace.yml: modes rail, coach)
+  ok(all(c("sat@rail", "sat@coach", "sat_summer@rail") %in% names(tt)), "train only and coach only routed for every window")
+  col <- tp$places$id[tp$places$name == "Col du Test"]
+  ok(nrow(dplyr::filter(tt[["sat_summer@rail"]], place == col)) == 0, "train only: no Col du Test (needs the coach)")
+  ok(nrow(dplyr::filter(tt[["sat_summer@coach"]], place == col)) == 0, "coach only: no Col du Test from Hubville (needs the train first)")
+  vr <- dplyr::filter(tt[["sat@rail"]], place == "r87000002")
+  ok(nrow(vr) == 1 && vr$p50 == v$p50 && vr$last_back == v$last_back, "train only: Val by train, same times")
+  ok(all(tt[["sat_summer@rail"]]$place %in% tp$places$id[tp$places$kind == "rail"]), "train only: you get off at stations")
+  ok(identical(sort(mode_places(tp, cfg, "coach")), sort(c(tp$hubs$id, "r87000002", col))), "coach only: places a coach stops at (Val has one in front), and the start")
 }
 
 if (nzchar(Sys.which("node"))) {
   message("app engine")
-  status <- system2("node", c(here::here("pipeline", "tests", "check_export.mjs"), out))
+  status <- system2("node", c(here::here("pipeline", "tests", "check_export.mjs"), out, "--all-routes"))
   ok(status == 0, "the app's engine loads the export and every result respects the filters")
 }
 message("\nall pipeline checks pass \u00b7 export in ", out)

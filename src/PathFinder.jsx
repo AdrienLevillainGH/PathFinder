@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Search, Map as MapIcon, Bookmark, Workflow, Settings2, SlidersHorizontal, TrainFront, Mountain, Radius, Clock,
-         ChevronUp, ChevronDown, ArrowRight, Trash2, Check, X, Plus, Minus, RotateCcw, Car, Bike, CircleCheck, ArrowLeft } from "lucide-react";
-import { runQuery, focusClimb, implied, PRESETS, DEFAULT_QUERY, fmtKm, fmtPct, fmtMin, fmtPace, difficulty } from "./engine.js";
+         ChevronUp, ChevronDown, ArrowRight, Trash2, Check, X, Plus, Minus, RotateCcw, CircleCheck, ArrowLeft, Bus } from "lucide-react";
+import { runQuery, focusClimb, implied, PRESETS, DEFAULT_QUERY, TRANSIT, fmtKm, fmtPct, fmtMin, fmtPace, difficulty } from "./engine.js";
 import { openData, ensureFor, ensureClimbs, ensureHub } from "./data.js";
 import { pickTheme, themeCss, THEMES, gradeColor } from "./theme.js";
 import { along } from "./geo.js";
@@ -48,9 +48,14 @@ function fitQuery(q, db) {
     fix.origin = (hubs.find((s) => /^strasbourg$/i.test(s.name)) || hubs[0])?.id;
   }
   if (!db.meta.windows.some((w) => w.id === q.window)) fix.window = db.meta.windows[0].id;
+  if (q.transit && q.transit !== "all" && !transitChoices(db).some((t) => t.id === q.transit)) fix.transit = "all";
   return Object.keys(fix).length ? { ...q, ...fix } : q;
 }
 const today = () => new Date().toISOString().slice(0, 10);
+// the transport choices this data has (older data: train + coach only)
+const transitChoices = (db) => TRANSIT.filter((t) => t.id === "all" || (db.meta.modes || []).includes(t.id));
+// "≤ 60 min", "≤ 60 min by train", "≤ 60 min by coach"
+const timeLine = (q) => `≤ ${q.maxTrain} min${q.transit && q.transit !== "all" ? ` by ${TRANSIT.find((t) => t.id === q.transit)?.short}` : ""}`;
 // the results sheet: a thin bar, a row of cards, or the whole list
 const SHEET = { min: 58, peek: 176 };
 const sheetHeight = (st) => (st === "full" ? null : SHEET[st]);
@@ -132,7 +137,7 @@ export default function PathFinder() {
   const setSetting = (k, v) => setStore((s) => ({ ...s, settings: { ...s.settings, [k]: v } }));
   const setLayers = (v) => setSetting("map", v);
   const openClimb = async (id) => {
-    await Promise.all([ensureClimbs(state.db, [id]), ensureHub(state.db, q.origin)]).catch(() => {});
+    await Promise.all([ensureClimbs(state.db, [id]), ensureHub(state.db, q.origin, q.transit)]).catch(() => {});
     const r = focusClimb(state.db, id, q, pace);
     if (r) setOpen(r);
   };
@@ -270,7 +275,7 @@ function Explore({ db, q, set, run, fetching, store, selected, setSelected, onOp
           </button>
         </div>
         <div className="no-scrollbar pointer-events-auto mt-1.5 flex gap-1.5 overflow-x-auto pb-1">
-          <FloatChip icon={TrainFront} onClick={() => openSheet("filters")}>≤ {q.maxTrain} min</FloatChip>
+          <FloatChip icon={q.transit === "coach" ? Bus : TrainFront} onClick={() => openSheet("filters")}>{timeLine(q)}</FloatChip>
           <FloatChip icon={Radius} onClick={() => openSheet("filters")}>≤ {fmtKm(q.maxApproach)} on foot</FloatChip>
           <FloatChip icon={Mountain} onClick={() => openSheet("filters")}>{preset ? preset.label : terrainLine(q)}</FloatChip>
           <FloatChip icon={Clock} onClick={() => openSheet("filters")}>{win.label.replace(":00", "").replace(":00", "")}</FloatChip>
@@ -315,6 +320,7 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
   const drag = useRef(null);
   const word = q.dir === "down" ? "descent" : "segment";
   const n = run.results.length;
+  const near = q.showNear ? run.near : [];
 
   // map → strip: bring the selected card into view
   useEffect(() => {
@@ -364,8 +370,8 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
           <div className="mx-auto h-1 w-10 rounded-full" style={{ background: "var(--line)" }} />
           <div className="mt-1.5 flex items-center gap-1.5">
             <div className="min-w-0">
-              <div className="truncate text-[15px] font-semibold">{fetching && !n ? "Loading the area…" : <>{n} {word}{n === 1 ? "" : "s"}{run.near.length ? <span className="font-normal dl-muted"> · {run.near.length} near misses</span> : null}{fetching ? <span className="font-normal dl-faint"> · updating…</span> : null}</>}</div>
-              <div className="truncate text-[11px] dl-faint">≤ {q.maxTrain} min · ≤ {fmtKm(q.maxApproach)} on foot · back the same day</div>
+              <div className="truncate text-[15px] font-semibold">{fetching && !n ? "Loading the area…" : <>{n} {word}{n === 1 ? "" : "s"}{near.length ? <span className="font-normal dl-muted"> · {near.length} near misses</span> : null}{fetching ? <span className="font-normal dl-faint"> · updating…</span> : null}</>}</div>
+              <div className="truncate text-[11px] dl-faint">{timeLine(q)} · ≤ {fmtKm(q.maxApproach)} on foot · back the same day</div>
             </div>
             {full ? <ChevronDown size={18} className="shrink-0 dl-muted" /> : <ChevronUp size={18} className="shrink-0 dl-muted" />}
           </div>
@@ -388,7 +394,7 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
                 onClick={() => (r.id === selected ? onOpen(r) : setSelected(r.id))} width={292} compact />
             </div>
           ))}
-          {!n && !fetching && <Empty>Nothing meets every filter. Pull up for the near misses and what each one is missing.</Empty>}
+          {!n && !fetching && <NoMatch q={q} set={set} near={run.near.length} />}
         </div>
       )}
 
@@ -404,11 +410,12 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
                   onClick={() => onOpen(r)} />
               ))}
             </div>
-            {run.near.length > 0 && (
+            {!n && !fetching && <div className="mt-3"><NoMatch q={q} set={set} near={run.near.length} /></div>}
+            {near.length > 0 && (
               <>
                 <h3 className="mt-6 text-[19px] font-semibold">Almost</h3>
                 <div className="mt-2 space-y-2">
-                  {run.near.map((r) => (
+                  {near.map((r) => (
                     <button key={"n" + r.id} onClick={() => onOpen(r)} className="flex w-full items-center gap-3 rounded-2xl border-2 border-dashed dl-line p-3 text-left">
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-medium">{r.climb.name}</span>
@@ -488,7 +495,7 @@ function Chip({ on, onClick, children }) {
 
 function Funnel({ run, q, onMore }) {
   const t = run.trace;
-  const steps = [[t.stations, "stations"], [t.reach, `≤ ${q.maxTrain} min by train`], [t.nearStation, `climbs ≤ ${fmtKm(q.maxApproach)} away`], [t.matched - (t.dupes || 0), "match"]];
+  const steps = [[t.stations, "stations"], [t.reach, `${timeLine(q)}`], [t.nearStation, `climbs ≤ ${fmtKm(q.maxApproach)} away`], [t.matched - (t.dupes || 0), "match"]];
   return (
     <button onClick={onMore} className="mt-6 flex w-full flex-wrap items-center gap-x-1.5 gap-y-1 text-left text-xs dl-faint">
       {steps.map(([n, l], k) => (
@@ -499,6 +506,20 @@ function Funnel({ run, q, onMore }) {
       ))}
       <span className="ml-auto tabular-nums">{t.ms.toFixed(1)} ms · how it works</span>
     </button>
+  );
+}
+
+// nothing found: offer the near misses when they are switched off
+function NoMatch({ q, set, near }) {
+  return (
+    <Empty>
+      Nothing meets every filter.
+      {near > 0 && !q.showNear && (
+        <button onClick={() => set({ showNear: true })} className="mt-1 block font-medium" style={{ color: "var(--abg)" }}>
+          Show the {near} near misses and what each one is missing
+        </button>
+      )}
+    </Empty>
   );
 }
 
@@ -517,6 +538,7 @@ function Filters({ db, q, set, setMode, run, onSavePreset, onClose, onOrigin, on
   const D = q.dir === "down" ? "D−" : "D+";
   const imp = implied(q);
   const n = run.results.length;
+  const choices = transitChoices(db);
   return (
     <FullSheet title="Filters" onClose={onClose} right={<button onClick={onReset} className="px-2 text-[15px] font-medium" style={{ color: "var(--abg)" }}>Reset</button>}
       footer={<button onClick={onClose} className="dl-accent min-h-[56px] w-full rounded-2xl text-[17px] font-semibold">Show {n} {q.dir === "down" ? "descent" : "segment"}{n === 1 ? "" : "s"}</button>}>
@@ -536,15 +558,11 @@ function Filters({ db, q, set, setMode, run, onSavePreset, onClose, onOrigin, on
       </Group>
 
       <Group title="Getting there">
-        <div className="no-scrollbar flex gap-2 overflow-x-auto">
-          <Chip on onClick={() => {}}><span className="inline-flex items-center gap-1.5"><TrainFront size={16} /> Regional train</span></Chip>
-          {[[Car, "Car"], [Bike, "Bike"]].map(([Icon, l]) => (
-            <button key={l} disabled className="dl-surface flex min-h-[40px] shrink-0 items-center gap-1.5 rounded-full border dl-line px-4 text-[15px] opacity-50">
-              <Icon size={16} /> {l} <span className="text-xs">· later</span>
-            </button>
-          ))}
-        </div>
-        <Slider label="Train, station to station" value={q.maxTrain} min={15} max={120} step={5} show={(v) => `≤ ${v} min`} onChange={(v) => set({ maxTrain: v })} />
+        {choices.length > 1
+          ? <Segmented value={q.transit || "all"} onChange={(v) => set({ transit: v })} options={choices.map((t) => [t.id, t.label])} />
+          : <Chip on onClick={() => {}}><span className="inline-flex items-center gap-1.5"><TrainFront size={16} /> Train + coach</span></Chip>}
+        <p className="mt-2 text-xs dl-faint">{q.transit === "rail" ? "TER trains only, there and back." : q.transit === "coach" ? "Fluo coaches only, there and back — from the coach stops near your station." : "Any mix of TER trains and Fluo coaches."} Car and parking: later.</p>
+        <Slider label={q.transit === "rail" ? "Train, station to station" : q.transit === "coach" ? "Coach, stop to stop" : "Train or coach, stop to stop"} value={q.maxTrain} min={15} max={120} step={5} show={(v) => `≤ ${v} min`} onChange={(v) => set({ maxTrain: v })} />
         <Slider label="From the station to the start" value={q.maxApproach} min={500} max={8000} step={250} show={(v) => `≤ ${fmtKm(v)}`} onChange={(v) => set({ maxApproach: v })} />
       </Group>
 
@@ -592,6 +610,10 @@ function Filters({ db, q, set, setMode, run, onSavePreset, onClose, onOrigin, on
             <Toggle label="Leave out tarmac" sub="no paved sections in the stretch" on={q.noPaved} onChange={(v) => set({ noPaved: v })} />
           </div>
         )}
+      </Group>
+
+      <Group title="Results">
+        <Toggle label="Near misses" sub="also list the closest ones that miss a filter, and what each one is missing" on={Boolean(q.showNear)} onChange={(v) => set({ showNear: v })} />
       </Group>
 
       <Group title="Save these filters">

@@ -1,4 +1,4 @@
-import { prepare, addClimbs, exactLine, train } from "./engine.js";
+import { prepare, addClimbs, exactLine, train, tkey } from "./engine.js";
 
 /* Loading the data. Two layouts:
    - all at once (the demo world): meta, stations, ttm, climbs, access
@@ -26,13 +26,16 @@ function once(map, key, load) {
   return map.get(key);
 }
 
-// train/coach times from one starting station
-export function ensureHub(db, hub) {
+// train/coach times from one starting station, for one transport choice
+// ("all" = train + coach; "rail", "coach" when the data has them)
+export function ensureHub(db, hub, transit = "all") {
   if (!db.tiled || !hub) return Promise.resolve();
-  return once(db.loaded.hubs, hub, async () => {
-    const t = await db.get(`ttm/${hub}.json`);
+  const mode = transit && transit !== "all" && (db.meta.modes || []).includes(transit) ? transit : "all";
+  return once(db.loaded.hubs, `${hub}|${mode}`, async () => {
+    const t = await db.get(`ttm/${hub}${mode === "all" ? "" : "." + mode}.json`);
     const remap = t.order.join() === db.order.join() ? null : t.order.map((id) => db.pos[id]);
-    for (const [w, row] of Object.entries(t.by)) {
+    for (const [win, row] of Object.entries(t.by)) {
+      const w = tkey({ window: win, transit: mode });
       db.ttm.by[w] = db.ttm.by[w] || {};
       if (!remap) { db.ttm.by[w][hub] = row; continue; }
       const out = new Array(db.order.length).fill(null);
@@ -48,7 +51,7 @@ export function tilesFor(db, q) {
   if (!db.tiled) return [];
   const reach = new Set([q.origin]);
   for (const s of db.stations) {
-    const t = train(db, q.origin, q.window, s.id);
+    const t = train(db, q.origin, tkey(q), s.id);
     if (!t || t[0] > q.maxTrain * 1.2) continue;
     if (q.roundTrip !== false && t[3] == null) continue;
     reach.add(s.id);
@@ -70,7 +73,7 @@ export function ensureTiles(db, ids) {
 // everything a search needs, before it runs
 export async function ensureFor(db, q) {
   if (!db.tiled) return;
-  await ensureHub(db, q.origin);
+  await ensureHub(db, q.origin, q.transit);
   await ensureTiles(db, tilesFor(db, q));
 }
 

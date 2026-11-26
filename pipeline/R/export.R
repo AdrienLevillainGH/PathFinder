@@ -47,7 +47,8 @@ export_app_data <- function(cfg, prof, acc, tp, ttm, dem = NULL, routes = NULL, 
            list(feed = feed, network = agency, from = if (is.na(proxy)) NULL else format(proxy))) else list())
   })
 
-  # ttm: by[window][hub] = one row per station, in `order`
+  # ttm: by[window][hub] = one row per station, in `order`. Keys are
+  # "<window>" (train + coach) or "<window>@<mode>" (train only, coach only)
   order <- vapply(stations, `[[`, "", "id")
   by <- purrr::imap(ttm, function(tab, w) {
     purrr::set_names(purrr::map(tp$hubs$id, function(h) {
@@ -119,9 +120,17 @@ export_app_data <- function(cfg, prof, acc, tp, ttm, dem = NULL, routes = NULL, 
     jsonlite::write_json(out, file.path(dir, "climbs", paste0(id, ".json")), auto_unbox = FALSE, digits = NA)
   }
 
-  # travel times, one file per starting station
-  for (h in tp$hubs$id)
-    write_json_file(list(hub = h, order = order, by = purrr::map(by, h)), file.path(dir, "ttm", paste0(h, ".json")))
+  # travel times, one file per starting station and transport choice:
+  # ttm/<hub>.json (train + coach), ttm/<hub>.<mode>.json (loaded when chosen)
+  key_mode <- ifelse(grepl("@", names(by), fixed = TRUE), sub(".*@", "", names(by)), "all")
+  key_win <- sub("@.*", "", names(by))
+  modes <- unique(c("all", key_mode))
+  for (m in modes) {
+    b <- stats::setNames(by[key_mode == m], key_win[key_mode == m])
+    for (h in tp$hubs$id)
+      write_json_file(list(hub = h, mode = m, order = order, by = purrr::map(b, h)),
+                      file.path(dir, "ttm", paste0(h, if (m == "all") "" else paste0(".", m), ".json")))
+  }
 
   cover <- purrr::map(tp$feeds, function(f) list(feed = f$id, label = f$label, page = f$page,
                                                  networks = purrr::pmap(f$coverage, function(...) {
@@ -135,7 +144,7 @@ export_app_data <- function(cfg, prof, acc, tp, ttm, dem = NULL, routes = NULL, 
               "Walking distances follow paths and roads, from the stop to the bottom (or top) of each climb."),
     sources = c("\u00a9 OpenStreetMap contributors (ODbL)", "IGN RGE ALTI (Etalab 2.0)", "SNCF, Fluo Grand Est GTFS (transport.data.gouv.fr)"),
     sources_planned = c("Car and bike access", "More regions"),
-    windows = windows, timetables = cover,
+    windows = windows, modes = as.list(modes), timetables = cover,
     counts = list(climbs = nrow(prof), stations = length(stations), hubs = nrow(tp$hubs)),
     tile = as.list(TILE), tiles = tile_index
   )

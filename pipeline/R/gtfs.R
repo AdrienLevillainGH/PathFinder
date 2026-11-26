@@ -187,6 +187,32 @@ gtfs_write <- function(g, file) {
   invisible(file)
 }
 
+# SNCF files its replacement coaches ("Car TER") under the same lines as
+# its trains (19 lines in Alsace mix both). For "train only" routing, a
+# trip that only stops at coach stops moves to a coach line of its own
+# (route_type 3, same line name). Trains and their times are unchanged.
+gtfs_split_coaches <- function(g, coach_stops = NULL) {
+  if (is.null(coach_stops) || !nzchar(coach_stops)) return(g)
+  car <- g$stop_times |>
+    dplyr::group_by(trip_id) |>
+    dplyr::summarise(car = all(grepl(coach_stops, stop_id, perl = TRUE)), .groups = "drop") |>
+    dplyr::filter(car)
+  hit <- g$trips$trip_id %in% car$trip_id
+  if (!any(hit)) return(g)
+  n0 <- nrow(g$trips)
+  moved <- unique(g$trips$route_id[hit])
+  g$trips$route_id[hit] <- paste0(g$trips$route_id[hit], ":coach")
+  new <- g$routes[g$routes$route_id %in% moved, , drop = FALSE]
+  new$route_id <- paste0(new$route_id, ":coach")
+  new$route_type <- if (is.numeric(new$route_type)) 3L else "3"
+  g$routes <- dplyr::bind_rows(g$routes, new) |>
+    dplyr::filter(route_id %in% g$trips$route_id)
+  check_rows(n0, nrow(g$trips), "trips after moving coaches to coach lines", allow_drop = FALSE)
+  check_unique(g$routes, "route_id", "routes after moving coaches")
+  say("%d coach trips moved off %d rail lines", sum(hit), length(moved))
+  g
+}
+
 # stop points actually served, with what serves them. `coach_stops`: a
 # regex for stop ids that are coach stops even on a "rail" route (SNCF
 # runs some coach services under train lines: StopPoint:OCECar TER-...)

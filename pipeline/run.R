@@ -53,7 +53,12 @@ run_region <- function(id, redo_from = NULL, install = FALSE, today = Sys.Date()
   acc <- cached(f(sprintf("6_access_%s.rds", today)), access_table(ele$net, climbs, tp$places, cfg), "access" %in% redo)
   ttm <- transit_times(cfg, tp, unique(c(acc$place, tp$hubs$id)))
 
-  routes <- cached(f(sprintf("7_routes_%s.rds", today)), access_paths(ele$net, acc, climbs, tp$places, cfg, ttm, tp$hubs), "access" %in% redo)
+  # walking routes: those already drawn are kept, only missing ones are
+  # added (e.g. the default stops of a new transport choice)
+  rf <- f(sprintf("7_routes_%s.rds", today))
+  known <- if (file.exists(rf) && !("access" %in% redo)) readRDS(rf) else NULL
+  routes <- access_paths(ele$net, acc, climbs, tp$places, cfg, ttm, tp$hubs, known = known)
+  if (is.null(known) || nrow(routes) != nrow(known)) saveRDS(routes, rf)
   dir <- export_app_data(cfg, climbs, acc, tp, ttm, ele$dem, routes)
   diagnostics(cfg, ele$net, climbs, acc, tp, ttm)
   if (install) install_in_app(cfg)
