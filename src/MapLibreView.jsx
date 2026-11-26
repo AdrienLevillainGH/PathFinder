@@ -6,6 +6,7 @@ import { along } from "./geo.js";
 import { fmtKm } from "./engine.js";
 import { BASES, OVERLAYS, baseStyle, applyLayers, credits, circle } from "./basemap.js";
 import { useWalk, approachLine } from "./walk.js";
+import { loadDetail } from "./data.js";
 
 /* The explore map on a real background (IGN or OSM tiles), drawn by
    MapLibre. Same props and behaviour as the hand-drawn MapView, which the
@@ -39,8 +40,16 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
 
   const showAll = Boolean(layers.all);
   const sel = run.results.find((r) => r.id === selected) || run.near.find((r) => r.id === selected);
-  const walk = useWalk(sel?.id);
+  const walk = useWalk(db, sel?.id);
   const appr = approachLine(sel, walk, db);
+  // with all the matches on the map, fetch their exact lines (rough until then)
+  const [exact, setExact] = useState(0);
+  useEffect(() => {
+    if (!showAll) return;
+    let live = true;
+    Promise.all(run.results.map((r) => loadDetail(db, r.id))).then(() => live && setExact((x) => x + 1));
+    return () => { live = false; };
+  }, [showAll, run]);
 
   // frame what is drawn: the selected match and its walk (or all the matches)
   const fitResults = (map, animate = true) => {
@@ -168,7 +177,7 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
       el.addEventListener("click", (e) => { e.stopPropagation(); onSelectRef.current?.(r.id); });
       markers.current.push(new maplibregl.Marker({ element: el }).setLngLat(along(r.climb, r.dir).coords[r.i]).addTo(map));
     }
-  }, [ready, run, selected, q.origin, q.maxApproach, theme, showAll, layers.trains, layers.coaches, layers.reach, appr?.coords.length, appr?.real]);
+  }, [ready, run, selected, q.origin, q.maxApproach, theme, showAll, layers.trains, layers.coaches, layers.reach, walk, exact, appr?.coords.length, appr?.real]);
 
   // a new search, a new selection or a route that arrives reframes the map
   // (with all the matches shown, only a new search does)
@@ -244,6 +253,7 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
 export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height = 300 }) {
   const box = useRef(null);
   const mapRef = useRef(null);
+  const pins = useRef([]);
   const apprRef = useRef(approach);
   apprRef.current = approach;
   const walkData = (a) => fc(a ? [line(a.coords, { real: a.real ? 1 : 0 })] : []);
@@ -281,10 +291,12 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
         const el = document.createElement("div");
         el.style.cssText = `width:24px;height:24px;border-radius:50%;border:2.5px solid #fff;background:${bg};display:flex;align-items:center;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.3)`;
         el.innerHTML = svg;
-        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
+        return new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map);
       };
-      pin(seg[0], theme.sel, `<svg viewBox="0 0 24 24" width="11" height="11"><path d="M7 4l12 8-12 8z" fill="#fff"/></svg>`);
-      pin(seg[seg.length - 1], "#1B1A16", `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" stroke-width="2.6"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>`);
+      pins.current = [
+        pin(seg[0], theme.sel, `<svg viewBox="0 0 24 24" width="11" height="11"><path d="M7 4l12 8-12 8z" fill="#fff"/></svg>`),
+        pin(seg[seg.length - 1], "#1B1A16", `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#fff" stroke-width="2.6"><path d="M5 21V4h11l-2 4 2 4H5"/></svg>`),
+      ];
       if (s) pin([s.lon, s.lat], theme.accentBg, TRAIN_SVG.replace('stroke="currentColor"', `stroke="${theme.accentText}"`));
       frame(map, false);
     };
@@ -305,13 +317,19 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     map.fitBounds(b, { padding: { top: 80, bottom: 50, left: 40, right: 40 }, maxZoom: 15.5, duration: animate ? 500 : 0 });
   };
 
-  // the walking route arrives after the page opens
+  // the walking route and the exact line arrive after the page opens
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !map.getSource("approach")) return;
+    const { coords } = along(r.climb, r.dir);
+    const seg = coords.slice(r.i, r.j + 1);
+    map.getSource("whole").setData(line(coords));
+    map.getSource("seg").setData(line(seg));
+    pins.current[0]?.setLngLat(seg[0]);
+    pins.current[1]?.setLngLat(seg[seg.length - 1]);
     map.getSource("approach").setData(walkData(approach));
     frame(map, true);
-  }, [approach?.coords.length, approach?.real]);
+  }, [approach?.coords.length, approach?.real, r.climb.rough]);
   return (
     <div className="absolute inset-0">
       <div ref={box} style={{ position: "absolute", top: 0, left: 0, right: 0, height, background: "#EBEDDA" }} />

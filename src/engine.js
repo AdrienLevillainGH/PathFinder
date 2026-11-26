@@ -74,19 +74,29 @@ export function prepare({ meta, stations, ttm, climbs, access }) {
   const order = ttm.order;
   const pos = Object.fromEntries(order.map((id, i) => [id, i]));
   const byId = Object.fromEntries(stations.stations.map((s) => [s.id, s]));
-  const prepped = climbs.map((c0) => {
+  const db = { meta, step, order, pos, stations: stations.stations, lines: stations.lines, byId, ttm, climbs: [], climbById: {} };
+  addClimbs(db, climbs, access);
+  return db;
+}
+
+// climbs arrive all at once (demo) or area by area (tiles): each is
+// prepared once and added to the search
+export function addClimbs(db, climbs, access = {}) {
+  for (const c0 of climbs) {
+    if (db.climbById[c0.id]) continue;
     const c = c0.z10 ? unpack(c0) : c0;
     const n = c.z.length;
     const wayE = expand(c.way || [[0, "p"]], n - 1);
     const surfE = expand(c.surf || [[0, "n"]], n - 1);
-    return {
-      ...c, step, n, access: access[c.id] || [], wayE, surfE,
+    const p = {
+      ...c, step: db.step, n, access: access[c.id] || [], wayE, surfE,
       up: series(c.z, 1, wayE, surfE),
       down: series([...c.z].reverse(), -1, [...wayE].reverse(), [...surfE].reverse()),
     };
-  });
-  return { meta, step, order, pos, stations: stations.stations, lines: stations.lines, byId, ttm, climbs: prepped,
-           climbById: Object.fromEntries(prepped.map((c) => [c.id, c])) };
+    db.climbs.push(p);
+    db.climbById[p.id] = p;
+  }
+  return db;
 }
 
 // compact climbs (pipeline): heights in decimetres and coordinates in
@@ -98,9 +108,42 @@ function undelta(d, scale) {
   return out;
 }
 function unpack(c) {
-  const { z10, lon, lat, ...rest } = c;
+  const { z10, lon, lat, c: rough, ...rest } = c;
+  const z = undelta(z10, 10);
+  if (lon) {
+    const x = undelta(lon, 1e5), y = undelta(lat, 1e5);
+    return { ...rest, z, coords: x.map((v, i) => [v, y[i]]) };
+  }
+  return { ...rest, z, coords: roughLine(rough, z.length), rough: true };
+}
+
+// tiles carry the line every 5th point (and the last): fill the rest in
+// straight lines until the exact line is fetched (exactLine)
+function roughLine(flat, n) {
+  const pts = [];
+  let x = 0, y = 0;
+  for (let k = 0; k + 1 < flat.length; k += 2) { x += flat[k]; y += flat[k + 1]; pts.push([x / 1e5, y / 1e5]); }
+  const at = [];
+  for (let i = 0; i < n; i += 5) at.push(i);
+  if (at[at.length - 1] !== n - 1) at.push(n - 1);
+  const out = new Array(n);
+  for (let s = 0; s < at.length; s++) {
+    const a = at[s], b = at[s + 1] ?? a, A = pts[s], B = pts[s + 1] || A;
+    for (let i = a; i <= b; i++) {
+      const t = b === a ? 0 : (i - a) / (b - a);
+      out[i] = [A[0] + t * (B[0] - A[0]), A[1] + t * (B[1] - A[1])];
+    }
+  }
+  return out;
+}
+
+// the exact line, once its file is fetched
+export function exactLine(c, lon, lat) {
   const x = undelta(lon, 1e5), y = undelta(lat, 1e5);
-  return { ...rest, z: undelta(z10, 10), coords: x.map((v, i) => [v, y[i]]) };
+  if (x.length !== c.n) return false;
+  c.coords = x.map((v, i) => [v, y[i]]);
+  c.rough = false;
+  return true;
 }
 
 // runs [[first edge, code], ...] → one code per edge
@@ -261,13 +304,13 @@ export function runQuery(db, q, pace = 6) {
   return { results, near: near.slice(0, 8), reach, trace };
 }
 
-// the ground a stretch covers, as ~45 m cells
+// the ground a stretch covers, as ~65 m cells (lines may still be rough)
 export function footprint(r) {
   const c = r.climb.coords, n = c.length;
   const cells = new Set();
   for (let k = r.i; k <= r.j; k++) {
     const [lon, lat] = r.dir === "down" ? c[n - 1 - k] : c[k];
-    cells.add(`${Math.floor(lon / 0.0006)},${Math.floor(lat / 0.0004)}`);
+    cells.add(`${Math.floor(lon / 0.0009)},${Math.floor(lat / 0.0006)}`);
   }
   return cells;
 }

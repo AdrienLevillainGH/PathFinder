@@ -1,7 +1,8 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Search, Map as MapIcon, Bookmark, Workflow, Settings2, SlidersHorizontal, TrainFront, Mountain, Radius, Clock,
          ChevronUp, ChevronDown, ArrowRight, Trash2, Check, X, Plus, Minus, RotateCcw, Car, Bike, CircleCheck, ArrowLeft } from "lucide-react";
-import { prepare, runQuery, focusClimb, implied, PRESETS, DEFAULT_QUERY, fmtKm, fmtPct, fmtMin, fmtPace, difficulty } from "./engine.js";
+import { runQuery, focusClimb, implied, PRESETS, DEFAULT_QUERY, fmtKm, fmtPct, fmtMin, fmtPace, difficulty } from "./engine.js";
+import { openData, ensureFor, ensureClimbs, ensureHub } from "./data.js";
 import { pickTheme, themeCss, THEMES, gradeColor } from "./theme.js";
 import { along } from "./geo.js";
 import { loadLocal, saveLocal, resetLocal, nowISO, uid } from "./storage.js";
@@ -18,19 +19,21 @@ import Segment from "./Segment.jsx";
 /* floating controls, cards at the bottom, a full route page).        */
 /* ================================================================== */
 
-const FILES = ["meta", "stations", "ttm", "climbs", "access"];
-
-async function loadData() {
-  const raw = {}, sizes = {};
-  await Promise.all(FILES.map(async (f) => {
-    const res = await fetch(`./data/${f}.json`);
-    if (!res.ok) throw new Error(`${f}.json (${res.status})`);
-    const text = await res.text();
-    sizes[f] = text.length;
-    raw[f] = JSON.parse(text);
-  }));
-  return { db: prepare(raw), sizes };
+// what was downloaded, by kind of file (for "How it works")
+const sizes = {};
+async function getJSON(path) {
+  const res = await fetch(`./data/${path}`);
+  if (!res.ok) throw new Error(`${path} (${res.status})`);
+  const text = await res.text();
+  const kind = path.includes("/") ? path.split("/")[0] + "/" : path;
+  sizes[kind] = (sizes[kind] || 0) + text.length;
+  return JSON.parse(text);
 }
+async function loadData() {
+  return { db: await openData(getJSON), sizes };
+}
+const NO_RUN = { results: [], near: [], reach: new Map(),
+  trace: { stations: 0, reach: 0, noBack: 0, climbs: 0, nearStation: 0, matched: 0, dupes: 0, near: 0, ms: 0 } };
 
 const TERRAIN_KEYS = ["mode", "gain", "grade", "len", "cap"];
 
@@ -79,7 +82,21 @@ export default function PathFinder() {
   const layers = { ...DEFAULT_LAYERS, ...(store.settings.map || {}) };
   useEffect(() => { saveLocal({ ...store, lastQuery: q }); }, [store, q]);
 
-  const run = useMemo(() => (state.status === "ready" ? runQuery(state.db, q, pace) : null), [state, q, pace]);
+  // the data a search needs is fetched first (by area), then the search runs
+  const [readyQ, setReadyQ] = useState(null);
+  const [fetching, setFetching] = useState(false);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (state.status !== "ready") return;
+    let live = true;
+    setFetching(true);
+    ensureFor(state.db, q)
+      .catch((e) => console.warn("PathFinder: some data did not load", e))
+      .finally(() => { if (live) { setReadyQ(q); setFetching(false); } });
+    return () => { live = false; };
+  }, [state, q]);
+  const run = useMemo(() => (state.status === "ready" && readyQ ? runQuery(state.db, readyQ, pace) : state.status === "ready" ? NO_RUN : null),
+    [state, readyQ, pace, tick]);
   useEffect(() => { setSelected(run?.results[0]?.id || null); }, [run]);
 
   const set = (patch) => setQ((prev) => {
@@ -114,7 +131,17 @@ export default function PathFinder() {
     graveyard: [...s.graveyard, { id: `preset:${pid}`, deletedAt: nowISO() }] }));
   const setSetting = (k, v) => setStore((s) => ({ ...s, settings: { ...s.settings, [k]: v } }));
   const setLayers = (v) => setSetting("map", v);
-  const openClimb = (id) => { const r = focusClimb(state.db, id, q, pace); if (r) setOpen(r); };
+  const openClimb = async (id) => {
+    await Promise.all([ensureClimbs(state.db, [id]), ensureHub(state.db, q.origin)]).catch(() => {});
+    const r = focusClimb(state.db, id, q, pace);
+    if (r) setOpen(r);
+  };
+  // saved climbs may sit in areas not loaded yet
+  useEffect(() => {
+    if (state.status !== "ready" || page !== "saved") return;
+    const ids = [...Object.keys(store.favourites), ...store.done.map((d) => d.climbId)];
+    ensureClimbs(state.db, ids).then(() => setTick((t) => t + 1)).catch(() => {});
+  }, [state, page, store.favourites, store.done]);
 
   const db = state.db;
   const pages = [
@@ -142,7 +169,7 @@ export default function PathFinder() {
           </div>
         )}
         {state.status === "ready" && page === "explore" && (
-          <Explore db={db} q={q} set={set} run={run} store={store} selected={selected} setSelected={setSelected}
+          <Explore db={db} q={q} set={set} run={run} fetching={fetching} store={store} selected={selected} setSelected={setSelected}
             onOpen={setOpen} openSheet={setSheet} goHow={() => setPage("how")} theme={theme} basemap={basemap} layers={layers} setLayers={setLayers} />
         )}
         {state.status === "ready" && page === "saved" && (
@@ -153,7 +180,7 @@ export default function PathFinder() {
           </div>
         )}
         {state.status === "ready" && page === "how" && (
-          <div className="absolute inset-0 overflow-y-auto"><How db={db} q={q} run={run} sizes={state.sizes} basemap={basemap} /></div>
+          <div className="absolute inset-0 overflow-y-auto"><How db={db} q={q} run={run} sizes={{ ...state.sizes }} basemap={basemap} /></div>
         )}
       </main>
 
@@ -193,7 +220,7 @@ export default function PathFinder() {
 /* Explore — the map is the page                                      */
 /* ================================================================== */
 
-function Explore({ db, q, set, run, store, selected, setSelected, onOpen, openSheet, goHow, theme, basemap, layers, setLayers }) {
+function Explore({ db, q, set, run, fetching, store, selected, setSelected, onOpen, openSheet, goHow, theme, basemap, layers, setLayers }) {
   const [sheet, setSheet] = useState("peek");
   const [centre, setCentre] = useState(null);
   const full = sheet === "full";
@@ -258,7 +285,7 @@ function Explore({ db, q, set, run, store, selected, setSelected, onOpen, openSh
         </button>
       )}
 
-      <ResultsSheet run={run} q={q} set={set} store={store} state={sheet} setState={setSheet}
+      <ResultsSheet run={run} fetching={fetching} q={q} set={set} store={store} state={sheet} setState={setSheet}
         selected={selected} setSelected={setSelected} onOpen={onOpen} goHow={goHow}
         showAll={Boolean(layers.all)} setShowAll={(v) => setLayers({ ...layers, all: v })} />
     </div>
@@ -281,7 +308,7 @@ function terrainLine(q) {
 
 /* ---------- the sheet with the results ---------- */
 
-function ResultsSheet({ run, q, set, store, state, setState, selected, setSelected, onOpen, goHow, showAll, setShowAll }) {
+function ResultsSheet({ run, fetching, q, set, store, state, setState, selected, setSelected, onOpen, goHow, showAll, setShowAll }) {
   const full = state === "full";
   const strip = useRef(null);
   const programmatic = useRef(false);
@@ -337,7 +364,7 @@ function ResultsSheet({ run, q, set, store, state, setState, selected, setSelect
           <div className="mx-auto h-1 w-10 rounded-full" style={{ background: "var(--line)" }} />
           <div className="mt-1.5 flex items-center gap-1.5">
             <div className="min-w-0">
-              <div className="truncate text-[15px] font-semibold">{n} {word}{n === 1 ? "" : "s"}{run.near.length ? <span className="font-normal dl-muted"> · {run.near.length} near misses</span> : null}</div>
+              <div className="truncate text-[15px] font-semibold">{fetching && !n ? "Loading the area…" : <>{n} {word}{n === 1 ? "" : "s"}{run.near.length ? <span className="font-normal dl-muted"> · {run.near.length} near misses</span> : null}{fetching ? <span className="font-normal dl-faint"> · updating…</span> : null}</>}</div>
               <div className="truncate text-[11px] dl-faint">≤ {q.maxTrain} min · ≤ {fmtKm(q.maxApproach)} on foot · back the same day</div>
             </div>
             {full ? <ChevronDown size={18} className="shrink-0 dl-muted" /> : <ChevronUp size={18} className="shrink-0 dl-muted" />}
@@ -361,7 +388,7 @@ function ResultsSheet({ run, q, set, store, state, setState, selected, setSelect
                 onClick={() => (r.id === selected ? onOpen(r) : setSelected(r.id))} width={292} compact />
             </div>
           ))}
-          {!n && <Empty>Nothing meets every filter. Pull up for the near misses and what each one is missing.</Empty>}
+          {!n && !fetching && <Empty>Nothing meets every filter. Pull up for the near misses and what each one is missing.</Empty>}
         </div>
       )}
 
@@ -772,11 +799,11 @@ function How({ db, q, run, sizes, basemap }) {
     { title: "Prepare", sub: "R pipeline, on your PC", items: [
       "OSM paths and forest tracks → a trail network, way types and surfaces",
       "IGN RGE ALTI 5 m → elevation every 20 m, smoothed",
-      `a climb catalogue (${db.climbs.length} climbs here)`,
-      `SNCF GTFS → r5r: ${db.stations.length} × ${db.stations.length} stations, ${db.meta.windows.length} departure windows`,
-      "in this preview: a generator with the same output",
+      `a climb catalogue (${db.meta.counts?.climbs ?? db.climbs.length} climbs in ${db.meta.region || "the demo"})`,
+      `SNCF + Fluo GTFS → r5r: ${db.meta.counts?.hubs ?? db.stations.length} starting stations × ${db.stations.length} stops, ${db.meta.windows.length} departure windows`,
+      db.tiled ? `climbs come in ${db.meta.tiles.length} areas; this search loaded ${db.loaded.tiles.size}` : "in this preview: a generator with the same output",
     ] },
-    { title: "Ship", sub: "static files, GitHub Pages", items: FILES.map((f) => `${f}.json · ${kb(sizes[f])}`) },
+    { title: "Ship", sub: "static files, GitHub Pages", items: Object.entries(sizes).map(([f, n]) => `${f} · ${kb(n)} downloaded`) },
     { title: "Answer", sub: "this app, in the browser", items: ["access: train times, then distances", "terrain: scan every stretch of each climb", "rank, explain the near misses", "saved segments → GitHub"] },
   ];
   const imp = implied(q);

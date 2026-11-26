@@ -23,7 +23,7 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
   const origin = db.byId[q.origin];
   const station = db.byId[r.station];
   const win = db.meta.windows.find((w) => w.id === q.window);
-  const walk = useWalk(c.id);
+  const walk = useWalk(db, c.id);
   const appr = approachLine(r, walk, db);
 
   // the tab follows the section in view
