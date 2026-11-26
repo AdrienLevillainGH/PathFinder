@@ -289,13 +289,15 @@ export function runQuery(db, q, pace = 6) {
 
   // climbs that share their upper part give the same stretch twice:
   // keep the one you reach soonest, drop the copies
-  results.sort((a, b) => a.total - b.total);
+  // (ties broken by id, so the outcome does not depend on loading order)
+  const tie = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.i - b.i);
+  results.sort((a, b) => a.total - b.total || tie(a, b));
   const kept = dedupe(results);
   trace.dupes = results.length - kept.length;
   results.length = 0;
   results.push(...kept);
   sortResults(results, q.sort);
-  near.sort((a, b) => a.score - b.score);
+  near.sort((a, b) => a.score - b.score || tie(a, b));
   const nearKept = dedupe(near, results.map(footprint));
   near.length = 0;
   near.push(...nearKept);
@@ -404,7 +406,8 @@ export function sortResults(list, by) {
     grade: (a, b) => b.grade - a.grade,
     long: (a, b) => b.len - a.len,
   }[by] || ((a, b) => a.total - b.total);
-  list.sort(f);
+  const tie = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : a.i - b.i);
+  list.sort((a, b) => f(a, b) || a.total - b.total || tie(a, b));
 }
 
 function whyTerrain(q, w) {
