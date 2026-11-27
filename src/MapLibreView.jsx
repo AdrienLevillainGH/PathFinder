@@ -434,8 +434,10 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
   }, [approach?.coords.length, approach?.real, r.climb.rough]);
   return (
     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height }}>
-      <div ref={box} className="absolute inset-0"
-        style={{ background: threeD ? "linear-gradient(180deg, #8FB8DE 0%, #C9DDEE 45%, #E8EEF2 100%)" : "#EBEDDA" }} />
+      {/* inline position: MapLibre's own CSS (.maplibregl-map { position: relative }) beats a class */}
+      <div ref={box}
+        style={{ position: "absolute", top: 0, right: 0, bottom: 0, left: 0,
+                 background: threeD ? "linear-gradient(180deg, #8FB8DE 0%, #C9DDEE 45%, #E8EEF2 100%)" : "#EBEDDA" }} />
       <div className="pointer-events-none absolute left-3 text-[10px]" style={{ bottom: full ? 28 : 32, color: "#1B1A16", textShadow: "0 0 3px #fff,0 0 3px #fff" }}>{credits(layers)}{threeD ? " · relief © Mapterhorn" : ""}</div>
     </div>
   );

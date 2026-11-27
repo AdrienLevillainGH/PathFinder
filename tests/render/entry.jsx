@@ -22,8 +22,8 @@ for (const [name, rr, startFull, basemap] of [["segment page", r, false, false],
   try {
     const html = renderToString(<Segment r={{ ...rr, base: { dir: r.dir, i: r.i, j: r.j } }} db={db} q={q} pace={6} theme={theme} basemap={basemap}
       layers={DEFAULT_LAYERS} setLayers={() => {}} fav={false} doneDates={[]} onFav={() => {}} onDone={() => {}} onClose={() => {}}
-      onView={() => {}} startFull={startFull} />);
-    const want = startFull ? "Elevation profile" : "Getting there";
+      onView={() => {}} startFull={startFull} rating={startFull ? null : 3.5} onRate={() => {}} />);
+    const want = startFull ? "Elevation profile" : "3.5/5";
     if (!html.includes(want)) throw new Error(`"${want}" not on the page`);
     console.log(`  ok  ${name} renders`);
   } catch (e) { fails++; console.log(`FAIL  ${name}: ${e.message}`); }

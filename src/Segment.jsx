@@ -1,11 +1,12 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain, Layers, ChevronDown, ChevronUp, Download } from "lucide-react";
+import { ArrowLeft, TrainFront, Footprints, Clock, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain, Layers, ChevronDown, ChevronUp, Download } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ReferenceDot, ResponsiveContainer } from "recharts";
 import { fmtKm, fmtPct, fmtMin, fmtClock, fmtPace, difficulty, WAYS, SURFACES } from "./engine.js";
 import { gradeColor, GRADE_COLORS, GRADE_LABELS } from "./theme.js";
 import { projection, bboxOf, path, along, gpx } from "./geo.js";
 import { useWalk, approachLine } from "./walk.js";
 import { BASES, OVERLAYS } from "./basemap.js";
+import { RatingStar, RatingPicker, fmtNote } from "./rating.jsx";
 const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ default: m.DetailMapGL })));
 
 /* The segment page, after Komoot's route page: map on top, the card
@@ -14,8 +15,9 @@ const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ defau
 const TABS = [["access", "Getting there"], ["elevation", "Elevation"], ["ways", "Way types"], ["surfaces", "Surfaces"]];
 const PANEL = 236;          // height of the profile panel under the full-screen map
 
-export default function Segment({ r, db, q, pace, theme, basemap, layers, setLayers, fav, doneDates, onFav, onDone, onClose, onView, startFull = false }) {
+export default function Segment({ r, db, q, pace, theme, basemap, layers, setLayers, fav, rating = null, onRate, onFav, onClose, onView, startFull = false }) {
   const [gpxOpen, setGpxOpen] = useState(false);
+  const [rateOpen, setRateOpen] = useState(false);
   // the map can take the whole screen (tap it), and show the relief in 3D
   const [full, setFull] = useState(startFull);
   const [threeD, setThreeD] = useState(false);
@@ -106,7 +108,7 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, setLay
               <Round onClick={onClose} label="Back"><ArrowLeft size={22} /></Round>
               <div className="flex gap-2">
                 <Round onClick={() => setGpxOpen(true)} label="GPX"><Share2 size={20} /></Round>
-                <Round onClick={() => onFav()} label={fav ? "Remove from saved" : "Save"}><Star size={20} fill={fav ? "currentColor" : "none"} /></Round>
+                <Round onClick={() => onFav()} label={fav ? "Remove from saved" : "Save"}><Bookmark size={20} fill={fav ? "currentColor" : "none"} /></Round>
               </div>
             </>
           )}
@@ -237,13 +239,13 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, setLay
           <button onClick={() => setGpxOpen(true)} className="dl-soft flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-2xl text-[17px] font-semibold">
             GPX <Share2 size={18} />
           </button>
-          <button onClick={onDone} aria-label="Mark as done" title={doneDates.length ? `Done on ${doneDates.join(", ")}` : "Mark as done"}
-            className="dl-soft flex min-h-[56px] w-16 items-center justify-center rounded-2xl">
-            <CircleCheck size={22} fill={doneDates.length ? "currentColor" : "none"} stroke={doneDates.length ? "var(--soft)" : "currentColor"} />
+          <button onClick={() => setRateOpen(true)} aria-label={rating == null ? "Give a note" : `Your note: ${rating} out of 5`}
+            className="dl-soft flex min-h-[56px] min-w-[64px] items-center justify-center gap-1.5 rounded-2xl px-3 text-[15px] font-semibold tabular-nums">
+            <RatingStar value={rating} size={24} />{rating != null && fmtNote(rating)}
           </button>
         </div>
-        {doneDates.length > 0 && <p className="-mt-1 pb-2 text-center text-xs dl-faint">Done on {doneDates.join(", ")}</p>}
       </div>
+      {rateOpen && <RatingPicker value={rating} title={c.name} onPick={(v) => onRate?.(v)} onClear={() => { onRate?.(null); setRateOpen(false); }} onClose={() => setRateOpen(false)} />}
 
       {gpxOpen && <GpxSheet r={r} onClose={() => setGpxOpen(false)} />}
     </div>

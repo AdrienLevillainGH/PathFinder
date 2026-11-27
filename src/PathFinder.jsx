@@ -1,8 +1,9 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Search, Map as MapIcon, Bookmark, Workflow, Settings2, SlidersHorizontal, TrainFront, Mountain, Radius, Clock,
-         ChevronUp, ChevronDown, ArrowRight, Trash2, Check, X, Plus, Minus, RotateCcw, CircleCheck, ArrowLeft, Bus } from "lucide-react";
+         ChevronUp, ChevronDown, ArrowRight, Trash2, Check, X, Plus, Minus, RotateCcw, ArrowLeft, Bus } from "lucide-react";
 import { runQuery, focusClimb, implied, PRESETS, DEFAULT_QUERY, TRANSIT, fmtKm, fmtPct, fmtMin, fmtPace, difficulty } from "./engine.js";
 import { openData, ensureFor, ensureClimbs, ensureHub } from "./data.js";
+import { RatingStar, fmtNote } from "./rating.jsx";
 import { pickTheme, themeCss, THEMES, gradeColor } from "./theme.js";
 import { along } from "./geo.js";
 import { loadLocal, saveLocal, resetLocal, nowISO, uid } from "./storage.js";
@@ -148,9 +149,12 @@ export default function PathFinder() {
     delete favourites[key];
     return { ...s, favourites, graveyard: [...s.graveyard, { id: `fav:${key}`, deletedAt: nowISO() }] };
   });
-  const markDone = (r) => setStore((s) => ({ ...s, done: [...s.done, { id: uid(), climbId: r.id, ...snapshot(r), date: today(), updatedAt: nowISO() }] }));
-  const removeDone = (doneId) => setStore((s) => ({ ...s, done: s.done.filter((d) => d.id !== doneId),
-    graveyard: [...s.graveyard, { id: `done:${doneId}`, deletedAt: nowISO() }] }));
+  // your note out of 5 (half points), kept with the saved segment: noting saves it
+  const rate = (r, value) => setStore((s) => {
+    const key = favKey(r);
+    const f = s.favourites[key] || { ...snapshot(r) };
+    return { ...s, favourites: { ...s.favourites, [key]: { ...f, rating: value, updatedAt: nowISO() } } };
+  });
   const savePreset = (name) => setStore((s) => ({ ...s, presets: [...s.presets, { id: uid(), name, query: q, updatedAt: nowISO() }] }));
   const deletePreset = (pid) => setStore((s) => ({ ...s, presets: s.presets.filter((p) => p.id !== pid),
     graveyard: [...s.graveyard, { id: `preset:${pid}`, deletedAt: nowISO() }] }));
@@ -172,9 +176,9 @@ export default function PathFinder() {
   // saved climbs may sit in areas not loaded yet
   useEffect(() => {
     if (state.status !== "ready" || page !== "saved") return;
-    const ids = [...Object.values(savedList(store)).map((f) => f.climb), ...store.done.map((d) => d.climbId)];
+    const ids = Object.values(savedList(store)).map((f) => f.climb);
     ensureClimbs(state.db, ids).then(() => setTick((t) => t + 1)).catch(() => {});
-  }, [state, page, store.favourites, store.done]);
+  }, [state, page, store.favourites]);
 
   const db = state.db;
   const pages = [
@@ -207,7 +211,7 @@ export default function PathFinder() {
         )}
         {state.status === "ready" && page === "saved" && (
           <div className="absolute inset-0 overflow-y-auto">
-            <Saved db={db} q={q} pace={pace} store={store} onOpenSaved={openSaved} onRemoveDone={removeDone} onUnfav={unfav}
+            <Saved db={db} q={q} pace={pace} store={store} onOpenSaved={openSaved} onUnfav={unfav}
               onApply={(p) => { setQ({ ...DEFAULT_QUERY, ...p.query }); setPage("explore"); }} onDeletePreset={deletePreset}
               onSettings={() => setSheet("settings")} />
           </div>
@@ -235,8 +239,8 @@ export default function PathFinder() {
       {open && (
         <Segment r={open} db={db} q={q} pace={pace} theme={theme} basemap={basemap} layers={layers} setLayers={setLayers}
           fav={Boolean(store.favourites[favKey(open)])} onView={open.base ? viewOpen : null}
-          doneDates={store.done.filter((d) => d.climbId === open.id).map((d) => d.date)}
-          onFav={() => toggleFav(open)} onDone={() => markDone(open)} onClose={() => setOpen(null)} />
+          rating={store.favourites[favKey(open)]?.rating ?? null} onRate={(v) => rate(open, v)}
+          onFav={() => toggleFav(open)} onClose={() => setOpen(null)} />
       )}
       {sheet === "filters" && <Filters db={db} q={q} set={set} setMode={setMode} run={run} onSavePreset={savePreset} onClose={() => setSheet(null)}
         onOrigin={() => setSheet("origin")} onReset={() => setQ({ ...DEFAULT_QUERY, origin: q.origin, window: q.window })} />}
@@ -419,7 +423,7 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
           style={{ scrollSnapType: "x mandatory", scrollPaddingLeft: 12 }}>
           {run.results.map((r) => (
             <div key={r.id} data-id={r.id} style={{ scrollSnapAlign: "start" }} className="shrink-0">
-              <Card r={r} on={r.id === selected} fav={Boolean(store.favourites[favKey(r)] || store.favourites[r.id])} done={store.done.some((d) => d.climbId === r.id)}
+              <Card r={r} on={r.id === selected} fav={store.favourites[favKey(r)] || store.favourites[r.id]}
                 onClick={() => (r.id === selected ? onOpen(r) : setSelected(r.id))} width={292} compact />
             </div>
           ))}
@@ -435,7 +439,7 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
             </div>
             <div className="mt-3 space-y-3">
               {run.results.map((r) => (
-                <Card key={r.id} r={r} on={r.id === selected} fav={Boolean(store.favourites[favKey(r)] || store.favourites[r.id])} done={store.done.some((d) => d.climbId === r.id)}
+                <Card key={r.id} r={r} on={r.id === selected} fav={store.favourites[favKey(r)] || store.favourites[r.id]}
                   onClick={() => onOpen(r)} />
               ))}
             </div>
@@ -465,7 +469,7 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
 }
 
 /* a result, as a Komoot card: picture on the left (here: the profile), facts on the right */
-function Card({ r, on, fav, done, onClick, width, compact }) {
+function Card({ r, on, fav, onClick, width, compact }) {
   const d = r.dir === "down" ? "↘" : "↗";
   return (
     <button onClick={onClick} className={`dl-surface flex gap-2.5 text-left ${compact ? "rounded-2xl p-2" : "rounded-3xl p-2.5"}`}
@@ -479,8 +483,9 @@ function Card({ r, on, fav, done, onClick, width, compact }) {
         <div className="flex items-center gap-1.5 text-[12px] tabular-nums dl-muted">
           <TrainFront size={13} style={{ color: "var(--abg)" }} />
           <span className="truncate">{r.train ? `${r.stationName} · ${r.train[0]} min` : "no station near"}</span>
-          {fav && <Bookmark size={13} className="ml-auto shrink-0" fill="currentColor" />}
-          {done && <CircleCheck size={13} className="shrink-0" />}
+          {fav && (fav.rating != null
+            ? <span className="ml-auto flex shrink-0 items-center gap-0.5 dl-text"><RatingStar value={fav.rating} size={13} />{fav.rating}</span>
+            : <Bookmark size={13} className="ml-auto shrink-0" fill="currentColor" />)}
         </div>
         <div className={`mt-0.5 font-semibold leading-snug ${compact ? "text-[14px]" : "text-[16px]"}`} style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.climb.name}</div>
         <div className={`mt-1 flex flex-wrap gap-x-1.5 tabular-nums dl-muted ${compact ? "text-[12px]" : "text-[13px]"}`}>
@@ -797,12 +802,11 @@ function OriginPicker({ db, q, onPick, onClose }) {
 /* Saved                                                              */
 /* ================================================================== */
 
-function Saved({ db, q, pace, store, onOpenSaved, onRemoveDone, onUnfav, onApply, onDeletePreset, onSettings }) {
+function Saved({ db, q, pace, store, onOpenSaved, onUnfav, onApply, onDeletePreset, onSettings }) {
   const favs = Object.entries(savedList(store))
     .map(([key, f]) => ({ key, f, c: db.climbById[f.climb] }))
     .filter((x) => x.c)
     .sort((a, b) => (b.f.updatedAt || "").localeCompare(a.f.updatedAt || ""));
-  const done = [...store.done].sort((a, b) => b.date.localeCompare(a.date));
   return (
     <div className="mx-auto max-w-2xl px-4 pb-10">
       <div className="flex items-center justify-between pt-4">
@@ -816,21 +820,10 @@ function Saved({ db, q, pace, store, onOpenSaved, onRemoveDone, onUnfav, onApply
             {favs.map(({ key, f, c }) => {
               const st = f.up != null ? f : climbStats(c);
               return <ListRow key={key} title={c.name} sub={`${statLine(st)}${st.whole ? " · whole climb" : ""}`}
-                onOpen={() => onOpenSaved(c.id, f)} onDelete={() => onUnfav(key)} />;
+                note={f.rating} onOpen={() => onOpenSaved(c.id, f)} onDelete={() => onUnfav(key)} />;
             })}
           </div>
         ) : <Empty>Tap Save on a segment to keep it here.</Empty>}
-      </Group>
-
-      <Group title={`Done · ${done.length}`}>
-        {done.length ? (
-          <div className="space-y-3">
-            {done.map((d) => {
-              const c = db.climbById[d.climbId];
-              return c ? <ListRow key={d.id} title={c.name} sub={d.up != null ? `${d.date} · ${statLine(d)}` : d.date} onOpen={() => onOpenSaved(c.id, d)} onDelete={() => onRemoveDone(d.id)} /> : null;
-            })}
-          </div>
-        ) : <Empty>The ✓ on a segment logs the date here. Later: a link to the DayLoad session.</Empty>}
       </Group>
 
       <Group title={`Filters · ${store.presets.length}`}>
@@ -849,13 +842,14 @@ function Saved({ db, q, pace, store, onOpenSaved, onRemoveDone, onUnfav, onApply
   );
 }
 
-function ListRow({ title, sub, onOpen, onDelete }) {
+function ListRow({ title, sub, note = null, onOpen, onDelete }) {
   return (
     <div className="dl-surface flex items-center gap-2 rounded-2xl p-3 shadow-sm">
       <button onClick={onOpen} className="min-w-0 flex-1 text-left">
         <span className="block truncate text-[17px] font-medium">{title}</span>
         <span className="block text-sm tabular-nums dl-muted">{sub}</span>
       </button>
+      {note != null && <span className="flex shrink-0 items-center gap-1 text-[15px] font-semibold tabular-nums"><RatingStar value={note} size={20} />{fmtNote(note)}</span>}
       <button onClick={onDelete} aria-label="Remove" className="flex h-11 w-11 items-center justify-center dl-faint"><Trash2 size={18} /></button>
     </div>
   );
@@ -989,7 +983,7 @@ function SettingsSheet({ store, pace, setSetting, onClose, onReset }) {
         <p className="mt-2 text-xs dl-faint">Off in the preview: the page cannot reach GitHub from inside Claude. The real app uses DayLoad's Sync screen unchanged.</p>
       </Group>
       <Group title="Preview data">
-        <button onClick={onReset} className="dl-surface min-h-[52px] w-full rounded-2xl border dl-line text-[15px]">Forget saved segments, done and filters</button>
+        <button onClick={onReset} className="dl-surface min-h-[52px] w-full rounded-2xl border dl-line text-[15px]">Forget saved segments, notes and filters</button>
       </Group>
     </FullSheet>
   );
