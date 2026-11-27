@@ -220,6 +220,7 @@ ok(all(purrr::map2_lgl(same$coords.x, same$coords.y, identical)), "...and they c
 # ---------------------------------------------------------------- export
 message("export")
 # a search can start from any train station in the area (starts: rail)
+cfg$transit$starts <- "rail"          # off in alsace.yml for now; tested here
 tp$starts <- transit_starts(cfg, tp)
 rail_in <- tp$places$id[tp$places$kind == "rail"]
 ok(nrow(tp$starts) > nrow(tp$hubs) && all(tp$hubs$id %in% tp$starts$id) && all(tp$starts$id %in% rail_in) &&

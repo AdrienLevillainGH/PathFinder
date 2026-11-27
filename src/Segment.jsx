@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain, Layers, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain, Layers, ChevronDown, ChevronUp, Download } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ReferenceDot, ResponsiveContainer } from "recharts";
 import { fmtKm, fmtPct, fmtMin, fmtClock, fmtPace, difficulty, WAYS, SURFACES } from "./engine.js";
 import { gradeColor, GRADE_COLORS, GRADE_LABELS } from "./theme.js";
@@ -453,10 +453,23 @@ function DetailMap({ r, db, approach }) {
 
 /* ---------- GPX ---------- */
 
-function GpxSheet({ r, onClose }) {
+export function GpxSheet({ r, onClose }) {
   const [whole, setWhole] = useState(false);
   const [copied, setCopied] = useState(false);
   const text = useMemo(() => gpx(r, whole), [r, whole]);
+  // a real .gpx file: saved to the phone's downloads, or shared to an app
+  // where the phone allows it (Android only shares some file types)
+  const fileName = `${r.climb.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "")}${whole ? "" : "-segment"}.gpx`;
+  const file = useMemo(() => (typeof File === "undefined" ? null : new File([text], fileName, { type: "application/gpx+xml" })), [text, fileName]);
+  const canShare = Boolean(file && typeof navigator !== "undefined" && navigator.canShare?.({ files: [file] }));
+  const download = () => {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url; a.download = fileName;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+  };
+  const share = async () => { try { await navigator.share({ files: [file], title: fileName }); } catch (e) { /* closed */ } };
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
@@ -475,15 +488,25 @@ function GpxSheet({ r, onClose }) {
       </div>
       <div className="mx-auto w-full max-w-2xl space-y-3 px-4">
         <div className="flex gap-2">
-          {[[false, "Matched stretch"], [true, "Whole climb"]].map(([v, l]) => (
+          {[[false, "Segment"], [true, "Whole climb"]].map(([v, l]) => (
             <button key={l} onClick={() => setWhole(v)} aria-pressed={whole === v}
               className={`rounded-full px-4 py-2 text-sm font-medium ${whole === v ? "dl-accent" : "dl-surface border dl-line dl-muted"}`}>{l}</button>
           ))}
         </div>
-        <button onClick={copy} className="dl-accent flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl text-[17px] font-semibold">
-          {copied ? <><Check size={18} /> Copied</> : <><Copy size={18} /> Copy GPX</>}
+        <button onClick={download} className="dl-accent flex min-h-[56px] w-full items-center justify-center gap-2 rounded-2xl text-[17px] font-semibold">
+          <Download size={19} /> Download .gpx
         </button>
-        <p className="text-xs dl-faint">Downloads are blocked inside Claude, so the file is copied instead. The real app saves it, and can send the route to COROS the way DayLoad talks to COROS.</p>
+        <div className="flex gap-2">
+          {canShare && (
+            <button onClick={share} className="dl-soft flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-2xl text-[15px] font-semibold">
+              <Share2 size={17} /> Share to an app
+            </button>
+          )}
+          <button onClick={copy} className="dl-soft flex min-h-[48px] flex-1 items-center justify-center gap-2 rounded-2xl text-[15px] font-semibold">
+            {copied ? <><Check size={17} /> Copied</> : <><Copy size={17} /> Copy the text</>}
+          </button>
+        </div>
+        <p className="text-xs dl-faint">{fileName} · saved in your phone's Downloads; open it with COROS, Komoot or any GPS app.</p>
       </div>
       <div className="mx-auto mt-3 w-full max-w-2xl flex-1 overflow-hidden px-4 pb-4">
         <textarea readOnly value={text} className="dl-surface h-full w-full rounded-2xl border dl-line p-3 font-mono text-xs" style={{ minHeight: 240 }} />

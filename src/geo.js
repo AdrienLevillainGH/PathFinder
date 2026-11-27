@@ -55,9 +55,9 @@ export function gpx(r, whole) {
   }
   const name = r.climb.name.replace(/[<&>"]/g, "");
   return `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="PathFinder (demo)" xmlns="http://www.topografix.com/GPX/1/1">
+<gpx version="1.1" creator="Chouca" xmlns="http://www.topografix.com/GPX/1/1">
   <trk>
-    <name>${name}${whole ? "" : " — matched stretch"}</name>
+    <name>${name}${whole ? "" : " — segment"}</name>
     <trkseg>
 ${pts.join("\n")}
     </trkseg>

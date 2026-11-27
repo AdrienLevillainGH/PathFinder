@@ -4,7 +4,7 @@
 import React from "react";
 import { renderToString } from "react-dom/server";
 import { readFileSync } from "node:fs";
-import Segment from "../../src/Segment.jsx";
+import Segment, { GpxSheet } from "../../src/Segment.jsx";
 import { prepare, runQuery, focusClimb, DEFAULT_QUERY } from "../../src/engine.js";
 import { THEMES } from "../../src/theme.js";
 import { DEFAULT_LAYERS } from "../../src/basemap.js";
@@ -28,5 +28,10 @@ for (const [name, rr, startFull, basemap] of [["segment page", r, false, false],
     console.log(`  ok  ${name} renders`);
   } catch (e) { fails++; console.log(`FAIL  ${name}: ${e.message}`); }
 }
+try {
+  const html = renderToString(<GpxSheet r={r} onClose={() => {}} />);
+  if (!html.includes("Download .gpx") || !/[A-Za-z0-9-]+-segment\.gpx/.test(html)) throw new Error("no download button or file name");
+  console.log("  ok  GPX sheet renders, with a download and a file name");
+} catch (e) { fails++; console.log(`FAIL  GPX sheet: ${e.message}`); }
 console.log(fails ? `${fails} failures` : "all render checks pass");
 if (fails) process.exit(1);
