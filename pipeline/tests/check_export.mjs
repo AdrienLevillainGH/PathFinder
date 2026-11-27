@@ -18,7 +18,11 @@ const get = async (p) => {
 };
 
 const db = await openData(get);
-const hubs = db.stations.filter((s) => s.hub !== false);
+// where a search can start: the main hubs, checked in full, plus a sample
+// of the other train stations (every 12th); all of them must have times
+const starts = db.stations.filter((s) => (s.start != null ? s.start : s.hub !== false));
+const others = starts.filter((s) => !s.hub);
+const hubs = [...starts.filter((s) => s.hub), ...others.filter((_, i) => i % 12 === 0)];
 // transport choices in this export: train + coach, and train only / coach only when routed
 const modes = db.meta.modes || ["all"];
 
@@ -44,7 +48,15 @@ for (const m of modes) for (const w of full.meta.windows) {
     if (row.length !== full.order.length) fail(`ttm ${k}/${o}: ${row.length} cells for ${full.order.length} stations`);
   }
 }
-console.log(`${full.climbs.length} climbs · ${full.stations.length} stations (${hubs.length} hubs) · windows ${full.meta.windows.map((w) => w.id).join(", ")} · ${modes.join(", ")}${db.tiled ? ` · ${db.meta.tiles.length} tiles` : ""}`);
+if (db.tiled) for (const s of starts) for (const m of modes) {
+  let t = null;
+  try { t = await get(`ttm/${s.id}${m === "all" ? "" : "." + m}.json`); } catch (e) { fail(`no times from ${s.name} (${m})`); }
+  for (const w of full.meta.windows) {
+    const row = t.by[w.id];
+    if (!row || row.length !== full.order.length) fail(`times from ${s.name} (${m}, ${w.id}): ${row?.length} cells for ${full.order.length} stations`);
+  }
+}
+console.log(`${full.climbs.length} climbs · ${full.stations.length} stations (${starts.length} starting stations, ${hubs.length} checked in full) · windows ${full.meta.windows.map((w) => w.id).join(", ")} · ${modes.join(", ")}${db.tiled ? ` · ${db.meta.tiles.length} tiles` : ""}`);
 
 const ids = (r) => r.results.map((x) => `${x.id}/${x.i}/${x.j}`).sort().join();
 // every preset for train + coach; two for the other choices (same code path)

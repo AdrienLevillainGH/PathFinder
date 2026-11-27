@@ -175,6 +175,23 @@ for (w in tp$scen$id) fake_ttm[[paste0(w, "@rail")]] <- dplyr::filter(fake_ttm[[
 
 # ---------------------------------------------------------------- walking routes
 message("walking routes")
+# the stops the app can pick: matrix version = a plain join, per window
+sides_t <- dplyr::bind_rows(dplyr::transmute(acc, climb, place, side = "b", d = d0), dplyr::transmute(acc, climb, place, side = "t", d = d1)) |>
+  dplyr::filter(is.finite(d))
+naive <- function(tab, starts) {
+  tt <- dplyr::filter(tab, !is.na(last_back)) |> dplyr::select(hub, place, p50) |>
+    dplyr::bind_rows(tibble::tibble(hub = starts, place = starts, p50 = 0))
+  sides_t |> dplyr::inner_join(tt, by = "place", relationship = "many-to-many") |>
+    dplyr::arrange(climb, side, hub, d, place) |>
+    dplyr::filter(p50 < dplyr::lag(cummin(p50), default = Inf), .by = c(climb, side, hub)) |>
+    dplyr::distinct(climb, place, side) |> dplyr::arrange(climb, side, place)
+}
+same_stops <- purrr::map_lgl(names(fake_ttm), function(w) {
+  a <- pareto_stops(sides_t, fake_ttm[[w]], tp$hubs$id) |> dplyr::distinct(climb, place, side) |> dplyr::arrange(climb, side, place)
+  b <- naive(fake_ttm[[w]], tp$hubs$id)
+  nrow(a) > 0 && identical(a, b)
+})
+ok(all(same_stops), "stops the app can pick: matrix version = plain join, every window")
 rt <- access_paths(net2, acc, prof, tp$places, cfg, fake_ttm, tp$hubs)
 ok(nrow(rt) > 0, sprintf("%d routes drawn", nrow(rt)))
 chk_rt <- rt |>
@@ -202,6 +219,11 @@ ok(all(purrr::map2_lgl(same$coords.x, same$coords.y, identical)), "...and they c
 
 # ---------------------------------------------------------------- export
 message("export")
+# a search can start from any train station in the area (starts: rail)
+tp$starts <- transit_starts(cfg, tp)
+rail_in <- tp$places$id[tp$places$kind == "rail"]
+ok(nrow(tp$starts) > nrow(tp$hubs) && all(tp$hubs$id %in% tp$starts$id) && all(tp$starts$id %in% rail_in) &&
+     identical(tp$starts$main, tp$starts$id %in% tp$hubs$id), "starting stations: the hubs first, then the other train stations")
 out <- export_app_data(cfg, prof, acc, tp, fake_ttm, ep$dem, rt)
 meta <- jsonlite::read_json(file.path(out, "meta.json"))
 st <- jsonlite::read_json(file.path(out, "stations.json"))
@@ -209,14 +231,20 @@ tiles <- purrr::map(list.files(file.path(out, "tiles"), full.names = TRUE), json
 ok(meta$climb_format == "tiles1" && length(meta$tiles) == length(tiles), sprintf("by area: %d tiles", length(tiles)))
 ok(sum(purrr::map_int(tiles, function(t) length(t$climbs))) == nrow(prof), "every climb in exactly one tile")
 ok(length(list.files(file.path(out, "climbs"))) == nrow(prof), "one detail file (exact line + walking routes) per climb")
-ok(length(list.files(file.path(out, "ttm"))) == 2 * nrow(tp$hubs), "one travel-time file per starting station and transport choice")
+ok(length(list.files(file.path(out, "ttm"))) == 2 * nrow(tp$starts), "one travel-time file per starting station and transport choice")
 ok(identical(unlist(meta$modes), c("all", "rail")) && length(meta$windows) == nrow(tp$scen), "meta: transport choices listed; windows unchanged")
 tt <- jsonlite::read_json(file.path(out, "ttm", paste0(tp$hubs$id[1], ".json")))
 tr <- jsonlite::read_json(file.path(out, "ttm", paste0(tp$hubs$id[1], ".rail.json")))
 ok(identical(names(tr$by), tp$scen$id) && tr$mode == "rail", "train-only file: every window")
 coach_pos <- which(purrr::map_chr(st$stations, "kind") == "coach")
 ok(length(coach_pos) > 0 && all(purrr::map_lgl(tr$by$sat[coach_pos], is.null)), "train only: coach stops unreachable")
-ok(length(tt$order) == length(st$stations) && all(lengths(tt$by) == length(st$stations)), "travel times: one cell per stop")
+ok(is.null(tt$order) && all(lengths(tt$by) == length(st$stations)), "travel times: one cell per stop, in stations.json order")
+st_ids <- purrr::map_chr(st$stations, "id")
+ok(identical(sort(st_ids[purrr::map_lgl(st$stations, "start")]), sort(tp$starts$id)) &&
+     identical(sort(st_ids[purrr::map_lgl(st$stations, "hub")]), sort(tp$hubs$id)), "stations: start and hub flags")
+v1 <- dplyr::filter(fake_ttm$sat, hub == tp$hubs$id[1], !is.na(last_back)) |> dplyr::slice(1)
+cell <- tt$by$sat[[match(v1$place, st_ids)]]
+ok(identical(unlist(cell), as.integer(round(c(v1$p50, v1$p75, v1$trips, v1$last_back, v1$changes)))), "travel times: a cell holds p50, p75, trips, last back, changes")
 idx <- jsonlite::read_json(file.path(out, "index.json"))
 ok(setequal(names(idx), prof$id), "index: every climb has its tile")
 files <- diagnostics(cfg, net2, prof, acc, tp, fake_ttm)
@@ -229,8 +257,15 @@ if (requireNamespace("r5r", quietly = TRUE) && isTRUE(java_major() >= 21) && nzc
   system2("osmium", c("cat", W$osm, "-o", pbf, "--overwrite"))
   tp2 <- tp
   tp2$scen <- dplyr::filter(tp$scen, id %in% c("sat", "sat_summer"))
-  tt <- transit_times(cfg, tp2, unique(c(acc$place, tp$hubs$id, tp$places$id)), pbf = pbf)
-  print(tt)
+  tt_all <- transit_times(cfg, tp2, unique(c(acc$place, tp$starts$id, tp$places$id)), pbf = pbf)
+  print(tt_all)
+  # from Val, a train station that is not a hub: the coach up to Col du Test in July
+  val <- "r87000002"; col <- tp$places$id[tp$places$name == "Col du Test"]
+  ok(identical(sort(unique(tt_all$sat$hub)), sort(tp$starts$id)), "times from every starting station, not just the hubs")
+  vc <- dplyr::filter(tt_all[["sat_summer@coach"]], hub == val, place == col)
+  ok(nrow(vc) == 1 && vc$trips == 1 && vc$p50 >= 20 && vc$p50 <= 30 && is.na(vc$last_back),
+     "from Val (not a hub): the July coach up to Col du Test; no coach back that Saturday (weekdays only)")
+  tt <- purrr::map(tt_all, function(x) dplyr::filter(x, hub == tp$hubs$id[1]))   # from Hubville below
   sat <- tt$sat; summer <- tt$sat_summer
   v <- dplyr::filter(sat, place == "r87000002")
   ok(nrow(v) == 1 && v$trips == 2 && v$p50 >= 12 && v$p50 <= 20 && v$changes == 0,
@@ -245,7 +280,6 @@ if (requireNamespace("r5r", quietly = TRUE) && isTRUE(java_major() >= 21) && nzc
   ok(nrow(dplyr::filter(summer, place == "r87000002")) == 1, "July Saturday: borrowed train days are routed")
   # transport choices (alsace.yml: modes rail, coach)
   ok(all(c("sat@rail", "sat@coach", "sat_summer@rail") %in% names(tt)), "train only and coach only routed for every window")
-  col <- tp$places$id[tp$places$name == "Col du Test"]
   ok(nrow(dplyr::filter(tt[["sat_summer@rail"]], place == col)) == 0, "train only: no Col du Test (needs the coach)")
   ok(nrow(dplyr::filter(tt[["sat_summer@coach"]], place == col)) == 0, "coach only: no Col du Test from Hubville (needs the train first)")
   vr <- dplyr::filter(tt[["sat@rail"]], place == "r87000002")

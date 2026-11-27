@@ -33,7 +33,8 @@ export function ensureHub(db, hub, transit = "all") {
   const mode = transit && transit !== "all" && (db.meta.modes || []).includes(transit) ? transit : "all";
   return once(db.loaded.hubs, `${hub}|${mode}`, async () => {
     const t = await db.get(`ttm/${hub}${mode === "all" ? "" : "." + mode}.json`);
-    const remap = t.order.join() === db.order.join() ? null : t.order.map((id) => db.pos[id]);
+    // rows follow stations.json; older files carry their own order
+    const remap = !t.order || t.order.join() === db.order.join() ? null : t.order.map((id) => db.pos[id]);
     for (const [win, row] of Object.entries(t.by)) {
       const w = tkey({ window: win, transit: mode });
       db.ttm.by[w] = db.ttm.by[w] || {};

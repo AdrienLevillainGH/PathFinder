@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain, Layers } from "lucide-react";
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
+import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain, Layers, ChevronDown, ChevronUp } from "lucide-react";
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ReferenceDot, ResponsiveContainer } from "recharts";
 import { fmtKm, fmtPct, fmtMin, fmtClock, fmtPace, difficulty, WAYS, SURFACES } from "./engine.js";
 import { gradeColor, GRADE_COLORS, GRADE_LABELS } from "./theme.js";
 import { projection, bboxOf, path, along, gpx } from "./geo.js";
@@ -12,6 +12,7 @@ const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ defau
    slides over it, tabs jump to sections, actions stay at the bottom. */
 
 const TABS = [["access", "Getting there"], ["elevation", "Elevation"], ["ways", "Way types"], ["surfaces", "Surfaces"]];
+const PANEL = 236;          // height of the profile panel under the full-screen map
 
 export default function Segment({ r, db, q, pace, theme, basemap, layers, setLayers, fav, doneDates, onFav, onDone, onClose, onView }) {
   const [gpxOpen, setGpxOpen] = useState(false);
@@ -19,7 +20,13 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, setLay
   const [full, setFull] = useState(false);
   const [threeD, setThreeD] = useState(false);
   const [picker, setPicker] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(true);
   const closeFull = () => { setThreeD(false); setPicker(false); setFull(false); };
+  // where the finger is on the elevation profile: a point along the climb,
+  // shown on the map (profile and map are linked, both ways of the page)
+  const [cursor, setCursor] = useState(null);
+  const line = useMemo(() => along(c, r.dir), [c, c.rough, r.dir]);
+  const cursorLL = cursor != null ? line.coords[Math.min(cursor, line.coords.length - 1)] : null;
   const [tab, setTab] = useState("access");
   const scroller = useRef(null);
   const refs = useRef({});
@@ -62,7 +69,8 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, setLay
       <div className={full ? "fixed inset-0 z-[55]" : "relative"} style={{ height: full ? "100%" : 300, background: "var(--land)" }}>
         {basemap
           ? <Suspense fallback={null}><DetailMapGL r={r} db={db} layers={layers} theme={theme} gradeColor={gradeColor} approach={appr}
-              height={full ? "100%" : 300} full={full} threeD={full && threeD} onTap={basemap ? () => setFull(true) : null} /></Suspense>
+              height={full ? (profileOpen ? `calc(100% - ${PANEL}px)` : "100%") : 300} full={full} threeD={full && threeD}
+              onTap={basemap ? () => setFull(true) : null} cursor={cursorLL} /></Suspense>
           : <DetailMap r={r} db={db} approach={appr} />}
         <div className="absolute inset-x-0 top-0 flex justify-between p-4" style={{ paddingTop: "calc(env(safe-area-inset-top) + 1rem)" }}>
           {full ? (
@@ -108,14 +116,28 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, setLay
             <Round onClick={() => setFull(true)} label="Open the map"><Maximize2 size={19} /></Round>
           </div>
         )}
-        {full && (
+        {full && profileOpen && (
+          <div className="dl-bg dl-text absolute inset-x-0 bottom-0 rounded-t-3xl px-4 pt-3 shadow-[0_-4px_16px_rgba(0,0,0,0.12)]"
+            style={{ height: PANEL, paddingBottom: "env(safe-area-inset-bottom)" }}>
+            <div className="mx-auto max-w-2xl">
+              <div className="flex items-center gap-2">
+                <span className="min-w-0 flex-1 truncate text-[17px] font-semibold">Elevation profile</span>
+                <button onClick={closeFull} className="rounded-full px-3 py-1.5 text-sm font-medium dl-muted">Details</button>
+                <button onClick={() => setProfileOpen(false)} aria-label="Hide the profile" className="flex h-9 w-9 items-center justify-center rounded-full dl-muted"><ChevronDown size={22} /></button>
+              </div>
+              <ProfileLine r={r} line={line} cursor={cursor} />
+              <Profile r={r} height={PANEL - 96} cursor={cursor} onScrub={setCursor} lockScroll />
+            </div>
+          </div>
+        )}
+        {full && !profileOpen && (
           <div className="absolute inset-x-0 bottom-0 px-3" style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}>
-            <button onClick={closeFull} className="dl-float dl-text mx-auto flex w-full max-w-md items-center gap-3 rounded-2xl px-4 py-3 text-left">
+            <button onClick={() => setProfileOpen(true)} className="dl-float dl-text mx-auto flex w-full max-w-md items-center gap-3 rounded-2xl px-4 py-3 text-left">
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[15px] font-semibold">{c.name}</span>
                 <span className="block text-[13px] tabular-nums dl-muted">{down ? "↘" : "↗"} {Math.round(r.up)} m · {fmtKm(r.len)} · {fmtPct(r.grade)}{r.whole ? " · whole climb" : ""}</span>
               </span>
-              <span className="text-sm font-medium dl-muted">Details</span>
+              <span className="flex items-center gap-1 text-sm font-medium dl-muted">Profile <ChevronUp size={18} /></span>
             </button>
           </div>
         )}
@@ -177,7 +199,8 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, setLay
           </Sec>
 
           <Sec id="elevation" title="Elevation" note={r.whole ? `whole climb · ${fmtKm((c.n - 1) * c.step)}` : `segment ${(r.i * c.step / 1000).toFixed(2)}–${(r.j * c.step / 1000).toFixed(2)} km of a ${fmtKm((c.n - 1) * c.step)} climb`} refs={refs}>
-            <Profile r={r} />
+            <ProfileLine r={r} line={line} cursor={cursor} />
+            <Profile r={r} cursor={cursor} onScrub={setCursor} />
             <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs dl-muted">
               {GRADE_COLORS.map((col, k) => (
                 <span key={col} className="flex items-center gap-1"><span className="inline-block h-2 w-3.5 rounded-sm" style={{ background: col }} />{GRADE_LABELS[k]}</span>
@@ -284,7 +307,25 @@ function Breakdown({ parts, legend }) {
 
 /* ---------- profile: dark area, line coloured by grade, the stretch lit ---------- */
 
-function Profile({ r }) {
+// the line above the profile: the segment's numbers, or where the finger is
+function ProfileLine({ r, line, cursor }) {
+  const down = r.dir === "down";
+  if (cursor == null)
+    return <p className="mb-1 mt-1 text-[15px] tabular-nums dl-muted">{down ? "↘" : "↗"} {Math.round(r.up)} m · {fmtKm(r.len)} · {fmtPct(r.grade)}{r.whole ? " · whole climb" : ""}</p>;
+  const { z } = line;
+  const k = Math.min(cursor, z.length - 1);
+  const a = Math.max(0, k - 2), b = Math.min(z.length - 1, k + 3);
+  const g = ((down ? -1 : 1) * (z[b] - z[a])) / ((b - a) * r.climb.step);
+  const into = k >= r.i && k <= r.j ? ` · ${fmtKm((k - r.i) * r.climb.step)} into the ${r.whole ? "climb" : "segment"}` : "";
+  return (
+    <p className="mb-1 mt-1 flex items-center gap-1.5 text-[15px] tabular-nums">
+      <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: gradeColor(g) }} />
+      <span className="truncate">{fmtKm(k * r.climb.step)} · {Math.round(z[k])} m · {fmtPct(g)} here<span className="dl-muted">{into}</span></span>
+    </p>
+  );
+}
+
+function Profile({ r, height = 230, cursor = null, onScrub = null, lockScroll = false }) {
   const { z } = along(r.climb, r.dir);
   const step = r.climb.step;
   const total = ((z.length - 1) * step) / 1000;
@@ -302,8 +343,20 @@ function Profile({ r }) {
   }, [data]);
   const lo = Math.floor((Math.min(...z) - 10) / 10) * 10, hi = Math.ceil((Math.max(...z) + 10) / 10) * 10;
   const gid = `g-${r.id}-${r.dir}-${r.i}-${r.j}`;
+  // the plot sits between the height axis (50 px) and a 4 px margin
+  const scrub = (e) => {
+    const box = e.currentTarget.getBoundingClientRect();
+    const f = (e.clientX - box.left - 50) / (box.width - 54);
+    onScrub?.(Math.round(Math.max(0, Math.min(1, f)) * (z.length - 1)));
+  };
+  const ck = cursor != null ? Math.min(cursor, z.length - 1) : null;
   return (
-    <div style={{ height: 230 }}>
+    <div className="relative" style={{ height }}>
+      {onScrub && (
+        <div className="absolute inset-0 z-10" style={{ touchAction: lockScroll ? "none" : "pan-y", cursor: "crosshair" }}
+          onPointerDown={(e) => { if (lockScroll) e.currentTarget.setPointerCapture(e.pointerId); scrub(e); }}
+          onPointerMove={(e) => (e.pointerType === "mouse" || e.buttons || lockScroll) && scrub(e)} />
+      )}
       <ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
           <defs>
@@ -314,13 +367,15 @@ function Profile({ r }) {
           <XAxis dataKey="d" type="number" domain={[0, total]} tickCount={4} tickFormatter={(v) => (v === 0 ? "Start" : `${v.toFixed(1)} km`)}
             tick={{ fontSize: 12, fill: "var(--muted)" }} stroke="var(--line)" tickLine={false} />
           <YAxis domain={[lo, hi]} ticks={[lo, hi]} width={50} tickFormatter={(v) => `${v} m`} tick={{ fontSize: 12, fill: "var(--muted)" }} axisLine={false} tickLine={false} />
-          <Tooltip content={<Tip />} cursor={{ stroke: "var(--faint)", strokeWidth: 1 }} />
+          {!onScrub && <Tooltip content={<Tip />} cursor={{ stroke: "var(--faint)", strokeWidth: 1 }} />}
           <Area dataKey="z" type="monotone" stroke="var(--faint)" strokeWidth={2} fill="var(--slate)" fillOpacity={0.28}
             baseValue={lo} isAnimationActive={false} dot={false} activeDot={false} />
           <Area dataKey="s" type="monotone" stroke={`url(#${gid})`} strokeWidth={3.5} fill="var(--slate)" fillOpacity={1}
             baseValue={lo} connectNulls={false} isAnimationActive={false} dot={false} activeDot={{ r: 4, fill: "#fff", stroke: "var(--slate)" }} />
           {a > 0 && <ReferenceLine x={a} stroke="var(--text)" strokeDasharray="3 3" />}
           {b < total && <ReferenceLine x={b} stroke="var(--text)" strokeDasharray="3 3" />}
+          {ck != null && <ReferenceLine x={(ck * step) / 1000} stroke="var(--abg)" strokeWidth={2.5} />}
+          {ck != null && <ReferenceDot x={(ck * step) / 1000} y={z[ck]} r={5} fill="#fff" stroke="var(--abg)" strokeWidth={2.5} />}
         </AreaChart>
       </ResponsiveContainer>
     </div>

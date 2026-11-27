@@ -273,7 +273,7 @@ function bearingOf(a, b) {
   return (Math.atan2(y, x) / k + 360) % 360;
 }
 
-export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height = 300, full = false, threeD = false, onTap = null }) {
+export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height = 300, full = false, threeD = false, onTap = null, cursor = null }) {
   const box = useRef(null);
   const mapRef = useRef(null);
   const pins = useRef([]);
@@ -335,8 +335,21 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     // a tap (not a drag) on the small map opens it full screen
     map.on("click", () => tapRef.current?.());
     mapRef.current = map;
-    return () => { mapRef.current = null; map.remove(); };
+    return () => { mapRef.current = null; curRef.current = null; map.remove(); };
   }, [r.id, r.i, r.j, r.dir]);
+
+  // where the finger is on the elevation profile
+  const curRef = useRef(null);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!cursor) { curRef.current?.remove(); curRef.current = null; return; }
+    if (!curRef.current) {
+      const el = document.createElement("div");
+      el.style.cssText = `width:20px;height:20px;border-radius:50%;background:#fff;border:5px solid ${theme.accentBg};box-shadow:0 1px 5px rgba(0,0,0,.45)`;
+      curRef.current = new maplibregl.Marker({ element: el }).setLngLat(cursor).addTo(map);
+    } else curRef.current.setLngLat(cursor);
+  }, [cursor?.[0], cursor?.[1]]);
 
   // background map and overlays chosen in the layers menu
   useEffect(() => {
@@ -396,7 +409,7 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     const s = db.byId[r.station];
     if (s) b.extend([s.lon, s.lat]);
     apprRef.current?.coords.forEach((c) => b.extend(c));
-    const padding = fullRef.current ? { top: 90, bottom: 110, left: 40, right: 40 } : { top: 80, bottom: 50, left: 40, right: 40 };
+    const padding = fullRef.current ? { top: 90, bottom: 50, left: 40, right: 40 } : { top: 80, bottom: 50, left: 40, right: 40 };
     if (threeRef.current) {
       const bearing = bearingOf(coords[r.i], coords[r.j]);
       const cam = map.cameraForBounds(b, { padding, bearing, maxZoom: 15 });
@@ -420,10 +433,10 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     frame(map, true);
   }, [approach?.coords.length, approach?.real, r.climb.rough]);
   return (
-    <div className="absolute inset-0">
-      <div ref={box} style={{ position: "absolute", top: 0, left: 0, right: 0, height,
-        background: threeD ? "linear-gradient(180deg, #8FB8DE 0%, #C9DDEE 45%, #E8EEF2 100%)" : "#EBEDDA" }} />
-      <div className="pointer-events-none absolute left-3 text-[10px]" style={{ bottom: full ? 96 : 32, color: "#1B1A16", textShadow: "0 0 3px #fff,0 0 3px #fff" }}>{credits(layers)}{threeD ? " · relief © Mapterhorn" : ""}</div>
+    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height }}>
+      <div ref={box} className="absolute inset-0"
+        style={{ background: threeD ? "linear-gradient(180deg, #8FB8DE 0%, #C9DDEE 45%, #E8EEF2 100%)" : "#EBEDDA" }} />
+      <div className="pointer-events-none absolute left-3 text-[10px]" style={{ bottom: full ? 28 : 32, color: "#1B1A16", textShadow: "0 0 3px #fff,0 0 3px #fff" }}>{credits(layers)}{threeD ? " · relief © Mapterhorn" : ""}</div>
     </div>
   );
 }

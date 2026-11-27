@@ -119,20 +119,37 @@ r5r_core <- function(cfg, tp, pbf = NULL) {
 # fastest trip that happens to use a train). Tram-trains count as trains.
 TRANSIT_MODES <- list(all = c("WALK", "TRANSIT"), rail = c("WALK", "RAIL", "TRAM"), coach = c("WALK", "BUS"))
 
+# Where a search can start: the hubs named in the config (listed first in
+# the app), and with `transit: starts: rail` every train station in the
+# area. Kept out of the cached timetables, so changing it needs no rerun.
+transit_starts <- function(cfg, tp) {
+  main <- dplyr::mutate(tp$hubs, main = TRUE)
+  if (!identical(cfg$transit$starts, "rail")) return(main)
+  bb <- unlist(cfg$area$bbox)
+  rail <- dplyr::filter(tp$places, kind == "rail", lon >= bb[1], lon <= bb[3], lat >= bb[2], lat <= bb[4]) |>
+    dplyr::anti_join(tp$hubs, by = "id") |>
+    dplyr::mutate(main = FALSE)
+  out <- dplyr::bind_rows(main, rail)
+  check_unique(out, "id", "starting stations")
+  say("starting stations: %d (%d hubs + %d other train stations)", nrow(out), nrow(main), nrow(rail))
+  out
+}
+
 # Which places count for a transport choice. Train only: stations (you get
 # off the train there, and everything after is the walk to the climb, drawn
 # and counted). Coach only: places a coach stops at. The starting stations
 # always count (you can walk from where you start).
 mode_places <- function(tp, cfg, m) {
   if (m == "all") return(tp$places$id)
-  if (m == "rail") return(union(tp$places$id[tp$places$kind == "rail"], tp$hubs$id))
+  starts <- (tp$starts %||% tp$hubs)$id
+  if (m == "rail") return(union(tp$places$id[tp$places$kind == "rail"], starts))
   feeds <- purrr::map_chr(tp$feeds, "id")
   has_rail <- purrr::map_lgl(tp$feeds, function(f) any(col_or(f$g$routes, "route_type") %in% c("0", "2", as.character(100:117)))) |> stats::setNames(feeds)
   coach_re <- purrr::map_chr(cfg$transit$feeds, function(f) f$coach_stops %||% "") |> stats::setNames(purrr::map_chr(cfg$transit$feeds, "id"))
   mb <- tp$members
   re <- coach_re[mb$feed]
   is_coach <- !has_rail[mb$feed] | (!is.na(re) & nzchar(re) & mapply(function(p, s) grepl(p, s, perl = TRUE), re, mb$stop_id))
-  union(unique(mb$place[is_coach]), tp$hubs$id)
+  union(unique(mb$place[is_coach]), starts)
 }
 
 # Returns one table per window and transport choice, named "<window>" for
@@ -143,25 +160,33 @@ transit_times <- function(cfg, tp, places_near, pbf = NULL) {
   modes <- unique(c("all", unlist(tr$modes)))
   bad <- setdiff(modes, names(TRANSIT_MODES))
   if (length(bad)) stop("transit: unknown modes ", paste(bad, collapse = ", "), " (use rail, coach)", call. = FALSE)
-  hubs <- dplyr::transmute(tp$hubs, id, lat, lon)
+  hubs <- dplyr::transmute(tp$starts %||% tp$hubs, id, lat, lon)
   dest <- dplyr::filter(tp$places, id %in% places_near) |> dplyr::transmute(id, lat, lon)
+  # cached per set of starting stations (just the hubs: the old file names)
+  sfx <- if (setequal(hubs$id, tp$hubs$id)) "" else paste0("_", hash_id(paste(sort(hubs$id), collapse = ",")))
   core <- NULL
   out <- list()
   for (m in modes) for (k in seq_len(nrow(tp$scen))) {
     s <- tp$scen[k, ]
     key <- if (m == "all") s$id else paste0(s$id, "@", m)
     keep <- mode_places(tp, cfg, m)
-    file <- if (m == "all") sprintf("ttm_%s_%s.rds", s$id, s$date) else sprintf("ttm_%s_%s_%s.rds", m, s$id, s$date)
+    file <- if (m == "all") sprintf("ttm_%s_%s%s.rds", s$id, s$date, sfx) else sprintf("ttm_%s_%s_%s%s.rds", m, s$id, s$date, sfx)
     out[[key]] <- cached(work_file(cfg, file), {
       if (is.null(core)) core <- r5r_core(cfg, tp, pbf)
       at <- function(m) as.POSIXct(sprintf("%s %02d:%02d:00", s$date, m %/% 60, m %% 60), tz = cfg$timezone)
-      say("%s %s (%s): %d hubs \u2192 %d places", s$id, s$date, m, nrow(hubs), nrow(dest))
-      fw <- quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = hubs, destinations = dest, mode = TRANSIT_MODES[[m]],
-                                             departure_datetime = at(s$out_start), time_window = s$out_end - s$out_start,
-                                             max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
-                                             walk_speed = tr$walk_speed_kmh, progress = FALSE)) |>
-        norm_expanded() |> trip_summary(tr$max_walk_min)
-      chunks <- split(dest, ceiling(seq_len(nrow(dest)) / 200))
+      say("%s %s (%s): %d starting stations \u2192 %d places", s$id, s$date, m, nrow(hubs), nrow(dest))
+      # out, 20 starting stations at a time (every minute of the window: many rows)
+      fw <- split(hubs, ceiling(seq_len(nrow(hubs)) / 20)) |>
+        purrr::map(function(o)
+          quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = o, destinations = dest, mode = TRANSIT_MODES[[m]],
+                                               departure_datetime = at(s$out_start), time_window = s$out_end - s$out_start,
+                                               max_trip_duration = tr$max_trip_min, max_walk_time = tr$max_walk_min,
+                                               walk_speed = tr$walk_speed_kmh, progress = FALSE)) |>
+            norm_expanded() |> trip_summary(tr$max_walk_min)) |>
+        dplyr::bind_rows()
+      # back, in batches of places: smaller ones when there are many starting stations
+      per <- min(200, max(25, round(20000 / nrow(hubs))))
+      chunks <- split(dest, ceiling(seq_len(nrow(dest)) / per))
       bk <- purrr::map(chunks, function(ch)
         quiet_r5r(r5r::expanded_travel_time_matrix(core, origins = ch, destinations = hubs, mode = TRANSIT_MODES[[m]],
                                          departure_datetime = at(s$back_start), time_window = s$back_end - s$back_start,

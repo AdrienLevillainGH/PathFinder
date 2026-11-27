@@ -39,12 +39,14 @@ const TERRAIN_KEYS = ["mode", "gain", "grade", "len", "cap"];
 
 // a saved query may name a station or window this data does not have
 // (demo ids vs real ones): fall back to Strasbourg / the first window
-const isHub = (s) => s.hub !== false;
+// where a search can start: any train station the data has times from
+// (older data: the hubs only); the hubs are the main ones, listed first
+const canStart = (s) => (s.start != null ? s.start : s.hub !== false);
 function fitQuery(q, db) {
   const fix = {};
   const o = db.byId[q.origin];
-  if (!o || !isHub(o)) {
-    const hubs = db.stations.filter(isHub);
+  if (!o || !canStart(o)) {
+    const hubs = db.stations.filter(canStart);
     fix.origin = (hubs.find((s) => /^strasbourg$/i.test(s.name)) || hubs[0])?.id;
   }
   if (!db.meta.windows.some((w) => w.id === q.window)) fix.window = db.meta.windows[0].id;
@@ -268,6 +270,7 @@ function Explore({ db, q, set, run, fetching, store, selected, setSelected, onOp
     if (!centre) return null;
     let best = null;
     for (const s of db.stations) {
+      if (!canStart(s)) continue;
       const d = kmBetween(centre, s);
       if (!best || d < best.d) best = { s, d };
     }
@@ -743,29 +746,49 @@ function Toggle({ label, sub, on, onChange }) {
 
 /* ---------- origin ---------- */
 
+// any train station: type a few letters (accents, dashes and "Saint"/"St"
+// don't matter); before typing, the main stations come first
+const normName = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+  .replace(/\bsaint\b/g, "st").replace(/\bsainte\b/g, "ste").replace(/[-'’.()]/g, " ").replace(/\s+/g, " ").trim();
 function OriginPicker({ db, q, onPick, onClose }) {
   const [text, setText] = useState("");
-  const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
-  const first = (s) => s.id === "stg" || /^strasbourg$/i.test(s.name);
-  const list = db.stations.filter((s) => isHub(s) && norm(s.name).includes(norm(text)))
-    .sort((a, b) => (first(a) ? -1 : first(b) ? 1 : a.name.localeCompare(b.name, "fr")));
+  const starts = useMemo(() => db.stations.filter(canStart), [db]);
+  const t = normName(text);
+  const byName = (a, b) => a.name.localeCompare(b.name, "fr");
+  const words = (s) => normName(s.name).split(" ");
+  // starts with what you typed first (the name or one of its words), then contains it
+  const rank = (s) => (normName(s.name).startsWith(t) ? 0 : words(s).some((w) => w.startsWith(t)) ? 1 : 2);
+  const found = t ? starts.filter((s) => normName(s.name).includes(t)).sort((a, b) => rank(a) - rank(b) || byName(a, b)) : null;
+  const main = starts.filter((s) => s.hub).sort((a, b) => (/^strasbourg$/i.test(a.name) ? -1 : /^strasbourg$/i.test(b.name) ? 1 : byName(a, b)));
+  const others = starts.filter((s) => !s.hub).sort(byName);
+  const row = (s) => (
+    <button key={s.id} onClick={() => onPick(s.id)} className="flex min-h-[52px] w-full items-center gap-3 border-b dl-line text-left">
+      <TrainFront size={18} className="shrink-0 dl-muted" />
+      <span className="flex-1 text-[17px]">{s.name}</span>
+      {s.id === q.origin && <Check size={20} style={{ color: "var(--abg)" }} />}
+    </button>
+  );
   return (
     <FullSheet title="Start from" onClose={onClose}>
       <div className="dl-float mt-2 flex h-14 items-center gap-3 rounded-full px-5">
         <Search size={20} />
-        <input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder="Station" aria-label="Station"
+        <input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder={`Any of ${starts.length} train stations`} aria-label="Train station"
           className="min-w-0 flex-1 bg-transparent text-[17px] focus:outline-none" />
+        {text && <button onClick={() => setText("")} aria-label="Clear" className="dl-muted"><X size={18} /></button>}
       </div>
-      <p className="mt-3 text-xs dl-faint">In the real app, “near me” uses your phone's location; it is blocked inside Claude. On the map, move to an area and tap “Start from …”.</p>
-      <div className="mt-2 divide-y" style={{ borderColor: "var(--line)" }}>
-        {list.map((s) => (
-          <button key={s.id} onClick={() => onPick(s.id)} className="flex min-h-[52px] w-full items-center gap-3 border-b dl-line text-left">
-            <TrainFront size={18} className="dl-muted" />
-            <span className="flex-1 text-[17px]">{s.name}</span>
-            {s.id === q.origin && <Check size={20} style={{ color: "var(--abg)" }} />}
-          </button>
-        ))}
-      </div>
+      {found ? (
+        <div className="mt-3">
+          {found.length ? found.map(row) : <p className="py-6 text-center text-sm dl-muted">No train station called “{text}” in {db.meta.region}.</p>}
+        </div>
+      ) : (
+        <>
+          {main.length > 0 && others.length > 0 && <h3 className="mt-5 text-xs font-semibold uppercase tracking-wide dl-faint">Main stations</h3>}
+          <div className="mt-1">{main.map(row)}</div>
+          {others.length > 0 && <h3 className="mt-6 text-xs font-semibold uppercase tracking-wide dl-faint">All train stations · A–Z</h3>}
+          <div className="mt-1">{others.map(row)}</div>
+        </>
+      )}
+      <p className="mt-4 text-xs dl-faint">On the map, move to an area and tap “Start from …” for the nearest station. Towns and “near me”: later.</p>
     </FullSheet>
   );
 }
@@ -853,7 +876,7 @@ function How({ db, q, run, sizes, basemap }) {
       "OSM paths and forest tracks → a trail network, way types and surfaces",
       "IGN RGE ALTI 5 m → elevation every 20 m, smoothed",
       `a climb catalogue (${db.meta.counts?.climbs ?? db.climbs.length} climbs in ${db.meta.region || "the demo"})`,
-      `SNCF + Fluo GTFS → r5r: ${db.meta.counts?.hubs ?? db.stations.length} starting stations × ${db.stations.length} stops, ${db.meta.windows.length} departure windows`,
+      `SNCF + Fluo GTFS → r5r: ${db.meta.counts?.starts ?? db.meta.counts?.hubs ?? db.stations.length} starting stations × ${db.stations.length} stops, ${db.meta.windows.length} departure windows`,
       db.tiled ? `climbs come in ${db.meta.tiles.length} areas; this search loaded ${db.loaded.tiles.size}` : "in this preview: a generator with the same output",
     ] },
     { title: "Ship", sub: "static files, GitHub Pages", items: Object.entries(sizes).map(([f, n]) => `${f} · ${kb(n)} downloaded`) },

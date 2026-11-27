@@ -76,6 +76,7 @@ transit:
   max_age_days: 7                  # re-download timetables older than this
   stop_merge_m: 150                # stop points closer than this become one place
   hubs: [Strasbourg, Molsheim, Obernai, Sélestat, Colmar, Mulhouse, Saverne, Haguenau, Wissembourg, Saint-Louis]
+  starts: rail                     # a search can start from any train station in the area (the hubs come first)
   # departure windows. weekday + from: "next" (the next one after today)
   # or "MM-DD" (first such weekday on/after that date, next time it comes)
   # or a fixed date: "2027-07-10". Lines that only run in summer show up

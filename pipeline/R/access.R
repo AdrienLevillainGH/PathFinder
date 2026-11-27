@@ -70,6 +70,37 @@ access_table <- function(net, prof, places, cfg) {
 # `known`: routes already drawn (same columns as the result); only the
 # missing ones are computed, then both are returned.
 # ------------------------------------------------------------------
+# The stops the app can pick, for one table of times (hub, place, p50,
+# last_back): for each climb end and starting station, a stop with a way
+# back that is sooner than every stop closer to the climb. Whatever the
+# time and distance limits, the app's pick is one of these.
+# Done one rank at a time on matrices (climb ends x starting stations):
+# with hundreds of starting stations a join of every pair is too big.
+pareto_stops <- function(sides, tab, starts = NULL) {
+  tab <- dplyr::filter(tab, !is.na(last_back), place %in% sides$place)
+  hub_ids <- unique(c(starts, tab$hub))
+  pl_ids <- unique(sides$place)
+  if (!length(hub_ids)) return(dplyr::select(sides[0, ], climb, place, side, d))
+  P <- matrix(Inf, length(pl_ids), length(hub_ids))              # minutes, place x start
+  P[cbind(match(tab$place, pl_ids), match(tab$hub, hub_ids))] <- tab$p50
+  at <- match(starts, pl_ids)                                     # you can walk from where you start
+  if (any(!is.na(at))) P[cbind(at[!is.na(at)], match(starts[!is.na(at)], hub_ids))] <- 0
+  s <- sides |>
+    dplyr::arrange(climb, side, d, place) |>
+    dplyr::mutate(g = dplyr::consecutive_id(climb, side)) |>
+    dplyr::mutate(rank = dplyr::row_number(), .by = g)
+  M <- matrix(Inf, max(s$g), length(hub_ids))                     # soonest so far, closer stops
+  keep <- logical(nrow(s))
+  for (r in seq_len(max(s$rank))) {
+    rows <- which(s$rank == r)
+    Pr <- P[match(s$place[rows], pl_ids), , drop = FALSE]
+    Mr <- M[s$g[rows], , drop = FALSE]
+    keep[rows] <- rowSums(Pr < Mr) > 0
+    M[s$g[rows], ] <- pmin(Mr, Pr)
+  }
+  dplyr::select(s[keep, ], climb, place, side, d)
+}
+
 access_paths <- function(net, acc, prof, places, cfg, ttm = NULL, hubs = NULL, k = 5, tol = 5, known = NULL, batch_n = 20000) {
   W <- walk_graph(net)
   ends <- dplyr::select(prof, climb = id, start, end)
@@ -90,17 +121,7 @@ access_paths <- function(net, acc, prof, places, cfg, ttm = NULL, hubs = NULL, k
   extra <- NULL
   if (!is.null(hubs)) extra <- dplyr::filter(sides, place %in% hubs$id)
   if (!is.null(ttm)) {
-    best <- purrr::map(names(ttm), function(w) {
-      tt <- dplyr::filter(ttm[[w]], !is.na(last_back)) |> dplyr::select(hub, place, p50)
-      if (!is.null(hubs)) tt <- dplyr::bind_rows(tt, tibble::tibble(hub = hubs$id, place = hubs$id, p50 = 0))
-      sides |>
-        dplyr::inner_join(tt, by = "place", relationship = "many-to-many") |>
-        dplyr::arrange(climb, side, hub, p50, d) |>
-        dplyr::group_by(climb, side, hub) |>
-        dplyr::filter(d < dplyr::lag(cummin(d), default = Inf)) |>
-        dplyr::ungroup() |>
-        dplyr::distinct(climb, place, side, d)
-    }) |>
+    best <- purrr::map(names(ttm), function(w) pareto_stops(sides, ttm[[w]], hubs$id)) |>
       dplyr::bind_rows() |>
       dplyr::distinct(climb, place, side, .keep_all = TRUE)
     extra <- dplyr::bind_rows(extra, best)
