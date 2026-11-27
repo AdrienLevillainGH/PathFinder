@@ -231,7 +231,7 @@ export default function PathFinder() {
       </nav>
 
       {open && (
-        <Segment r={open} db={db} q={q} pace={pace} theme={theme} basemap={basemap} layers={layers}
+        <Segment r={open} db={db} q={q} pace={pace} theme={theme} basemap={basemap} layers={layers} setLayers={setLayers}
           fav={Boolean(store.favourites[favKey(open)])} onView={open.base ? viewOpen : null}
           doneDates={store.done.filter((d) => d.climbId === open.id).map((d) => d.date)}
           onFav={() => toggleFav(open)} onDone={() => markDone(open)} onClose={() => setOpen(null)} />

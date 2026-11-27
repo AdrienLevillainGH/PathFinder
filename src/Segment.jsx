@@ -1,10 +1,11 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain } from "lucide-react";
+import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain, Layers } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 import { fmtKm, fmtPct, fmtMin, fmtClock, fmtPace, difficulty, WAYS, SURFACES } from "./engine.js";
 import { gradeColor, GRADE_COLORS, GRADE_LABELS } from "./theme.js";
 import { projection, bboxOf, path, along, gpx } from "./geo.js";
 import { useWalk, approachLine } from "./walk.js";
+import { BASES, OVERLAYS } from "./basemap.js";
 const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ default: m.DetailMapGL })));
 
 /* The segment page, after Komoot's route page: map on top, the card
@@ -12,12 +13,13 @@ const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ defau
 
 const TABS = [["access", "Getting there"], ["elevation", "Elevation"], ["ways", "Way types"], ["surfaces", "Surfaces"]];
 
-export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, doneDates, onFav, onDone, onClose, onView }) {
+export default function Segment({ r, db, q, pace, theme, basemap, layers, setLayers, fav, doneDates, onFav, onDone, onClose, onView }) {
   const [gpxOpen, setGpxOpen] = useState(false);
   // the map can take the whole screen (tap it), and show the relief in 3D
   const [full, setFull] = useState(false);
   const [threeD, setThreeD] = useState(false);
-  const closeFull = () => { setThreeD(false); setFull(false); };
+  const [picker, setPicker] = useState(false);
+  const closeFull = () => { setThreeD(false); setPicker(false); setFull(false); };
   const [tab, setTab] = useState("access");
   const scroller = useRef(null);
   const refs = useRef({});
@@ -66,10 +68,30 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
           {full ? (
             <>
               <Round onClick={closeFull} label="Close the map"><ArrowLeft size={22} /></Round>
-              <button onClick={() => setThreeD(!threeD)} aria-pressed={threeD} title="Relief in 3D"
-                className={`flex h-12 items-center gap-1.5 rounded-full px-4 text-[15px] font-semibold ${threeD ? "dl-accent" : "dl-float dl-text"}`}>
-                <Mountain size={18} /> 3D
-              </button>
+              <div className="relative flex gap-2">
+                {setLayers && <Round onClick={() => setPicker(!picker)} label="Map layers"><Layers size={20} /></Round>}
+                <button onClick={() => setThreeD(!threeD)} aria-pressed={threeD} title="Relief in 3D"
+                  className={`flex h-12 items-center gap-1.5 rounded-full px-4 text-[15px] font-semibold ${threeD ? "dl-accent" : "dl-float dl-text"}`}>
+                  <Mountain size={18} /> 3D
+                </button>
+                {picker && (
+                  <div className="dl-float dl-text absolute right-0 top-14 w-56 rounded-2xl p-2 text-[14px]">
+                    <div className="px-2 pb-1 pt-1 text-xs dl-faint">Map</div>
+                    {Object.entries(BASES).map(([k, b]) => (
+                      <button key={k} onClick={() => setLayers({ ...layers, base: k })} className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left">
+                        {b.label}{layers.base === k && <Check size={18} style={{ color: "var(--abg)" }} />}
+                      </button>
+                    ))}
+                    <div className="px-2 pb-1 pt-2 text-xs dl-faint">On top</div>
+                    {Object.entries(OVERLAYS).map(([k, o]) => (
+                      <button key={k} onClick={() => setLayers({ ...layers, [k]: !layers[k] })} className="flex w-full items-center justify-between rounded-xl px-2 py-2 text-left">
+                        {o.label}{layers[k] && <Check size={18} style={{ color: "var(--abg)" }} />}
+                      </button>
+                    ))}
+                    <p className="px-2 pt-1 text-[11px] dl-faint">The same choice as on the Explore map. In 3D, two fingers up or down tilt the view.</p>
+                  </div>
+                )}
+              </div>
             </>
           ) : (
             <>

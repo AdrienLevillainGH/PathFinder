@@ -288,8 +288,9 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
   const walkData = (a) => fc(a ? [line(a.coords, { real: a.real ? 1 : 0 })] : []);
   useEffect(() => {
     const { coords, z } = along(r.climb, r.dir);
+    // tilt up to 85° in 3D (MapLibre's limit; its default is 60°), to look along the ground
     const map = new maplibregl.Map({ container: box.current, style: baseStyle(layers), center: coords[r.i], zoom: 13, interactive: true,
-      attributionControl: false, dragRotate: false, pitchWithRotate: false, touchPitch: false });
+      attributionControl: false, dragRotate: false, touchPitch: false, maxPitch: 85 });   // turning and tilting: 3D only
     map.touchZoomRotate.disableRotation();
     const init = () => {
       if (map.getSource("seg")) return;
@@ -337,6 +338,12 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     return () => { mapRef.current = null; map.remove(); };
   }, [r.id, r.i, r.j, r.dir]);
 
+  // background map and overlays chosen in the layers menu
+  useEffect(() => {
+    const map = mapRef.current;
+    if (map && map.getLayer("paper")) applyLayers(map, layers);
+  }, [layers.base, layers.relief, layers.contours]);
+
   // follow the box when it grows to the whole screen and back
   useEffect(() => {
     const ro = new ResizeObserver(() => mapRef.current?.resize());
@@ -361,7 +368,9 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
         if (gone || mapRef.current !== map) return;
         const go = () => {
           if (!map.getSource("dem")) map.addSource("dem", { type: "raster-dem", tiles: ["mapterhorn://{z}/{x}/{y}"], encoding: "terrarium", tileSize: 512, maxzoom: 14 });
-          map.setTerrain({ source: "dem", exaggeration: 1.3 });
+          map.setTerrain({ source: "dem", exaggeration: 1 });            // true scale
+          // above the horizon: let the sky behind the map show through
+          if (map.getLayer("paper")) map.setPaintProperty("paper", "background-opacity", 0);
           handlers.forEach((h) => h.enable());
           map.touchZoomRotate.enableRotation();
           frame(map, true);
@@ -370,6 +379,7 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
       }).catch(() => {});
     } else if (map.getTerrain?.()) {
       map.setTerrain(null);
+      if (map.getLayer("paper")) map.setPaintProperty("paper", "background-opacity", 1);
       handlers.forEach((h) => h.disable());
       map.touchZoomRotate.disableRotation();
       map.easeTo({ pitch: 0, bearing: 0, duration: 400 });
@@ -390,7 +400,7 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     if (threeRef.current) {
       const bearing = bearingOf(coords[r.i], coords[r.j]);
       const cam = map.cameraForBounds(b, { padding, bearing, maxZoom: 15 });
-      if (cam) map.easeTo({ ...cam, zoom: cam.zoom - 0.4, bearing, pitch: 60, duration: animate ? 900 : 0 });
+      if (cam) map.easeTo({ ...cam, zoom: cam.zoom - 0.3, bearing, pitch: 65, duration: animate ? 900 : 0 });
       return;
     }
     map.fitBounds(b, { padding, maxZoom: 15.5, duration: animate ? 500 : 0 });
@@ -411,7 +421,8 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
   }, [approach?.coords.length, approach?.real, r.climb.rough]);
   return (
     <div className="absolute inset-0">
-      <div ref={box} style={{ position: "absolute", top: 0, left: 0, right: 0, height, background: "#EBEDDA" }} />
+      <div ref={box} style={{ position: "absolute", top: 0, left: 0, right: 0, height,
+        background: threeD ? "linear-gradient(180deg, #8FB8DE 0%, #C9DDEE 45%, #E8EEF2 100%)" : "#EBEDDA" }} />
       <div className="pointer-events-none absolute left-3 text-[10px]" style={{ bottom: full ? 96 : 32, color: "#1B1A16", textShadow: "0 0 3px #fff,0 0 3px #fff" }}>{credits(layers)}{threeD ? " · relief © Mapterhorn" : ""}</div>
     </div>
   );
