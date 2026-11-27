@@ -14,23 +14,23 @@ const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ defau
 const TABS = [["access", "Getting there"], ["elevation", "Elevation"], ["ways", "Way types"], ["surfaces", "Surfaces"]];
 const PANEL = 236;          // height of the profile panel under the full-screen map
 
-export default function Segment({ r, db, q, pace, theme, basemap, layers, setLayers, fav, doneDates, onFav, onDone, onClose, onView }) {
+export default function Segment({ r, db, q, pace, theme, basemap, layers, setLayers, fav, doneDates, onFav, onDone, onClose, onView, startFull = false }) {
   const [gpxOpen, setGpxOpen] = useState(false);
   // the map can take the whole screen (tap it), and show the relief in 3D
-  const [full, setFull] = useState(false);
+  const [full, setFull] = useState(startFull);
   const [threeD, setThreeD] = useState(false);
   const [picker, setPicker] = useState(false);
   const [profileOpen, setProfileOpen] = useState(true);
   const closeFull = () => { setThreeD(false); setPicker(false); setFull(false); };
+  const [tab, setTab] = useState("access");
+  const scroller = useRef(null);
+  const refs = useRef({});
+  const c = r.climb;
   // where the finger is on the elevation profile: a point along the climb,
   // shown on the map (profile and map are linked, both ways of the page)
   const [cursor, setCursor] = useState(null);
   const line = useMemo(() => along(c, r.dir), [c, c.rough, r.dir]);
   const cursorLL = cursor != null ? line.coords[Math.min(cursor, line.coords.length - 1)] : null;
-  const [tab, setTab] = useState("access");
-  const scroller = useRef(null);
-  const refs = useRef({});
-  const c = r.climb;
   const down = r.dir === "down";
   const d = down ? "D−" : "D+";
   const origin = db.byId[q.origin];
