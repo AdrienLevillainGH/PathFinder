@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark } from "lucide-react";
+import { ArrowLeft, Star, TrainFront, Footprints, Clock, CircleCheck, Share2, Copy, Check, ArrowRight, Bookmark, Maximize2, Mountain } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 import { fmtKm, fmtPct, fmtMin, fmtClock, fmtPace, difficulty, WAYS, SURFACES } from "./engine.js";
 import { gradeColor, GRADE_COLORS, GRADE_LABELS } from "./theme.js";
@@ -12,8 +12,12 @@ const DetailMapGL = lazy(() => import("./MapLibreView.jsx").then((m) => ({ defau
 
 const TABS = [["access", "Getting there"], ["elevation", "Elevation"], ["ways", "Way types"], ["surfaces", "Surfaces"]];
 
-export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, doneDates, onFav, onDone, onClose }) {
+export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, doneDates, onFav, onDone, onClose, onView }) {
   const [gpxOpen, setGpxOpen] = useState(false);
+  // the map can take the whole screen (tap it), and show the relief in 3D
+  const [full, setFull] = useState(false);
+  const [threeD, setThreeD] = useState(false);
+  const closeFull = () => { setThreeD(false); setFull(false); };
   const [tab, setTab] = useState("access");
   const scroller = useRef(null);
   const refs = useRef({});
@@ -52,18 +56,47 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
 
   return (
     <div ref={scroller} className="dl-root dl-bg dl-text fixed inset-0 z-50 overflow-y-auto" role="dialog" aria-modal="true" aria-label={c.name}>
-      {/* map */}
-      <div className="relative" style={{ height: 300, background: "var(--land)" }}>
+      {/* map: a header, or the whole screen */}
+      <div className={full ? "fixed inset-0 z-[55]" : "relative"} style={{ height: full ? "100%" : 300, background: "var(--land)" }}>
         {basemap
-          ? <Suspense fallback={null}><DetailMapGL r={r} db={db} layers={layers} theme={theme} gradeColor={gradeColor} approach={appr} /></Suspense>
+          ? <Suspense fallback={null}><DetailMapGL r={r} db={db} layers={layers} theme={theme} gradeColor={gradeColor} approach={appr}
+              height={full ? "100%" : 300} full={full} threeD={full && threeD} onTap={basemap ? () => setFull(true) : null} /></Suspense>
           : <DetailMap r={r} db={db} approach={appr} />}
         <div className="absolute inset-x-0 top-0 flex justify-between p-4" style={{ paddingTop: "calc(env(safe-area-inset-top) + 1rem)" }}>
-          <Round onClick={onClose} label="Back"><ArrowLeft size={22} /></Round>
-          <div className="flex gap-2">
-            <Round onClick={() => setGpxOpen(true)} label="GPX"><Share2 size={20} /></Round>
-            <Round onClick={onFav} label={fav ? "Remove from saved" : "Save"}><Star size={20} fill={fav ? "currentColor" : "none"} /></Round>
-          </div>
+          {full ? (
+            <>
+              <Round onClick={closeFull} label="Close the map"><ArrowLeft size={22} /></Round>
+              <button onClick={() => setThreeD(!threeD)} aria-pressed={threeD} title="Relief in 3D"
+                className={`flex h-12 items-center gap-1.5 rounded-full px-4 text-[15px] font-semibold ${threeD ? "dl-accent" : "dl-float dl-text"}`}>
+                <Mountain size={18} /> 3D
+              </button>
+            </>
+          ) : (
+            <>
+              <Round onClick={onClose} label="Back"><ArrowLeft size={22} /></Round>
+              <div className="flex gap-2">
+                <Round onClick={() => setGpxOpen(true)} label="GPX"><Share2 size={20} /></Round>
+                <Round onClick={() => onFav()} label={fav ? "Remove from saved" : "Save"}><Star size={20} fill={fav ? "currentColor" : "none"} /></Round>
+              </div>
+            </>
+          )}
         </div>
+        {basemap && !full && (
+          <div className="absolute right-4" style={{ bottom: 36 }}>
+            <Round onClick={() => setFull(true)} label="Open the map"><Maximize2 size={19} /></Round>
+          </div>
+        )}
+        {full && (
+          <div className="absolute inset-x-0 bottom-0 px-3" style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}>
+            <button onClick={closeFull} className="dl-float dl-text mx-auto flex w-full max-w-md items-center gap-3 rounded-2xl px-4 py-3 text-left">
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[15px] font-semibold">{c.name}</span>
+                <span className="block text-[13px] tabular-nums dl-muted">{down ? "↘" : "↗"} {Math.round(r.up)} m · {fmtKm(r.len)} · {fmtPct(r.grade)}{r.whole ? " · whole climb" : ""}</span>
+              </span>
+              <span className="text-sm font-medium dl-muted">Details</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* the card */}
@@ -74,7 +107,18 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
             <span className="text-xs dl-faint">{down ? "Descent" : "Climb"} towards {c.towards}{db.meta.demo ? " · demo climb, generated" : ""}</span>
           </div>
           <h2 className="mt-2 text-[26px] font-semibold leading-tight" style={{ textWrap: "balance" }}>{c.name}</h2>
-          {r.whole && <p className="mt-1 text-sm dl-muted">No stretch of this climb meets the current terrain filter, so the whole climb is shown.</p>}
+          {onView && (
+            <div className="dl-soft mt-2 inline-flex rounded-full p-0.5 text-sm" role="group" aria-label="Show">
+              {[["segment", "Segment"], ["whole", "Whole climb"]].map(([v, l]) => {
+                const on = (r.whole ? "whole" : "segment") === v;
+                return (
+                  <button key={v} onClick={() => !on && onView(v)} aria-pressed={on}
+                    className={`rounded-full px-3.5 py-1.5 ${on ? "dl-surface font-semibold shadow-sm" : "dl-muted"}`}>{l}</button>
+                );
+              })}
+            </div>
+          )}
+          {r.nomatch && <p className="mt-1 text-sm dl-muted">No stretch of this climb meets the current terrain filter, so the whole climb is shown.</p>}
           <div className="mt-2 flex flex-wrap items-center gap-x-2 text-[15px] tabular-nums dl-muted">
             {r.train && <><span>{fmtMin(r.total)} to the start</span><span>·</span></>}
             <span>{fmtKm(r.len)}</span><span>·</span>
@@ -110,7 +154,7 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
             ) : <p className="text-sm dl-muted">No station within 8 km of this climb.</p>}
           </Sec>
 
-          <Sec id="elevation" title="Elevation" note={`matched stretch ${(r.i * c.step / 1000).toFixed(2)}–${(r.j * c.step / 1000).toFixed(2)} km of ${fmtKm((c.n - 1) * c.step)}`} refs={refs}>
+          <Sec id="elevation" title="Elevation" note={r.whole ? `whole climb · ${fmtKm((c.n - 1) * c.step)}` : `segment ${(r.i * c.step / 1000).toFixed(2)}–${(r.j * c.step / 1000).toFixed(2)} km of a ${fmtKm((c.n - 1) * c.step)} climb`} refs={refs}>
             <Profile r={r} />
             <div className="mt-2 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs dl-muted">
               {GRADE_COLORS.map((col, k) => (
@@ -128,12 +172,12 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
             </div>
           </Sec>
 
-          <Sec id="ways" title="Way types" note="matched stretch" refs={refs}>
+          <Sec id="ways" title="Way types" note={r.whole ? "whole climb" : "this segment"} refs={refs}>
             <Breakdown parts={r.ways} legend={WAYS} />
             <p className="mt-3 text-sm dl-muted">{c.marked ? "On a marked route" : "Not on a marked route"} · OSM difficulty: {c.sac === "mountain_hiking" ? "mountain path" : "hiking path"}</p>
           </Sec>
 
-          <Sec id="surfaces" title="Surfaces" note="matched stretch" refs={refs}>
+          <Sec id="surfaces" title="Surfaces" note={r.whole ? "whole climb" : "this segment"} refs={refs}>
             <Breakdown parts={r.surfaces} legend={SURFACES} />
           </Sec>
         </div>
@@ -142,7 +186,7 @@ export default function Segment({ r, db, q, pace, theme, basemap, layers, fav, d
       {/* actions */}
       <div className="dl-bg fixed inset-x-0 bottom-0 z-20" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="mx-auto flex max-w-2xl gap-3 px-4 py-3">
-          <button onClick={onFav} className="dl-accent flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-2xl text-[17px] font-semibold">
+          <button onClick={() => onFav()} className="dl-accent flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-2xl text-[17px] font-semibold">
             {fav ? "Saved" : "Save"} <Bookmark size={20} fill={fav ? "currentColor" : "none"} />
           </button>
           <button onClick={() => setGpxOpen(true)} className="dl-soft flex min-h-[56px] flex-1 items-center justify-center gap-2 rounded-2xl text-[17px] font-semibold">

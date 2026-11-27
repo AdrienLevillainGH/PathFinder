@@ -386,28 +386,39 @@ export function breakdown(codes, i, j, step) {
   return out;
 }
 
-// one climb opened on its own (from Saved): best stretch for the
-// current terrain filter, reached from whichever station is soonest,
-// with no access limits. Falls back to the whole climb.
-export function focusClimb(db, id, q, pace = 6) {
+// one stretch (points i..j) of a climb: D+, D−, length, grade
+export function stretchStats(c, dir, i, j) {
+  const s = dir === "down" ? c.down : c.up;
+  j = Math.max(1, Math.min(j, c.n - 1));
+  i = Math.max(0, Math.min(i, j - 1));
+  const len = (j - i) * c.step, net = s.sign * (s.z[j] - s.z[i]);
+  return { i, j, up: s.pu[j] - s.pu[i], dn: s.pd[j] - s.pd[i], net, len, grade: net / len };
+}
+
+// one climb opened on its own, reached from whichever station is soonest
+// (no access limits). `stretch`:
+//   {dir, i, j}      a saved segment: exactly that stretch
+//   {dir, whole}     the whole climb
+//   null             the best stretch for the current terrain filter; the
+//                    whole climb if none fits (nomatch)
+export function focusClimb(db, id, q, pace = 6, stretch = null) {
   const c = db.climbById[id];
   if (!c) return null;
+  const qq = stretch?.dir ? { ...q, dir: stretch.dir } : q;
   const reach = new Map();
   for (const s of db.stations) {
-    const t = train(db, q.origin, tkey(q), s.id);
+    const t = train(db, qq.origin, tkey(qq), s.id);
     if (t) reach.set(s.id, t);
   }
-  const entries = c.access.map(([sid, d0, d1]) => ({ sid, entry: q.dir === "down" ? d1 : d0 })).filter((e) => reach.has(e.sid));
-  const open = { ...q, maxApproach: Infinity, maxTrain: Infinity };
-  let { best } = searchClimb(db, c, open, entries.length ? entries : [{ sid: null, entry: 0 }]);
-  if (!best) {
-    const s = q.dir === "down" ? c.down : c.up;
-    const j = c.n - 1, len = j * c.step, net = s.sign * (s.z[j] - s.z[0]);
-    best = { i: 0, j, up: s.pu[j], dn: s.pd[j], net, len, grade: net / len, whole: true };
-  }
+  const entries = c.access.map(([sid, d0, d1]) => ({ sid, entry: qq.dir === "down" ? d1 : d0 })).filter((e) => reach.has(e.sid));
+  const open = { ...qq, maxApproach: Infinity, maxTrain: Infinity };
+  let best = null;
+  if (stretch && !stretch.whole && stretch.j != null) best = stretchStats(c, qq.dir, stretch.i, stretch.j);
+  else if (!stretch?.whole) best = searchClimb(db, c, open, entries.length ? entries : [{ sid: null, entry: 0 }]).best;
+  if (!best) best = { ...stretchStats(c, qq.dir, 0, c.n - 1), whole: true, nomatch: !stretch?.whole };
   const acc = bestAccess(best, entries, reach, c.step, open, pace) ||
     { station: null, train: null, approach: null, approachMin: 0, total: Infinity };
-  return describe(db, c, q, best, acc);
+  return describe(db, c, qq, best, acc);
 }
 
 export function sortResults(list, by) {

@@ -1,6 +1,6 @@
 // Engine checks: run with `npm test`. Brute force is the referee.
 import { readFileSync } from "node:fs";
-import { prepare, runQuery, searchClimb, implied, DEFAULT_QUERY, PRESETS, footprint, overlap, tkey } from "../src/engine.js";
+import { prepare, runQuery, searchClimb, implied, DEFAULT_QUERY, PRESETS, footprint, overlap, tkey, focusClimb } from "../src/engine.js";
 
 const load = (f) => JSON.parse(readFileSync(new URL(`./fixtures/demo/${f}`, import.meta.url)));
 const db = prepare({ meta: load("meta.json"), stations: load("stations.json"), ttm: load("ttm.json"),
@@ -132,6 +132,22 @@ for (const p of PRESETS) for (const w of ["wd", "sat", "sun"]) for (const dir of
   check(rail.results.length > 0 && rail.results.every((r) => r.station !== used), "train only: stops it cannot reach are not used");
   check(runQuery(db3, { ...q, transit: "all" }, 6).results.length === all.results.length, "train + coach: unchanged");
   check(runQuery(db3, { ...q, transit: "coach" }, 6).results.length === 0, "a choice the data does not have finds nothing (the app falls back)");
+}
+
+// a saved segment reopens exactly as saved, whatever the filters are now
+{
+  const db4 = prepare({ meta: load("meta.json"), stations: load("stations.json"), ttm: load("ttm.json"), climbs: load("climbs.json"), access: load("access.json") });
+  const q = { ...DEFAULT_QUERY };
+  const r = runQuery(db4, q, 6).results[0];
+  const other = { ...q, mode: "grade", grade: 0.3, len: 3000 };          // nothing fits this
+  const back = focusClimb(db4, r.id, other, 6, { dir: r.dir, i: r.i, j: r.j });
+  check(back.i === r.i && back.j === r.j && Math.abs(back.up - r.up) < 1e-6 && Math.abs(back.grade - r.grade) < 1e-9 && !back.whole,
+        "saved segment: same stretch, same D+, length and grade under other filters");
+  check(back.station === r.station && back.approach === r.approach, "saved segment: same stop and walk");
+  const whole = focusClimb(db4, r.id, q, 6, { dir: r.dir, whole: true });
+  check(whole.whole && !whole.nomatch && whole.i === 0 && whole.j === r.climb.n - 1 && whole.len >= r.len, "whole climb on request (not a no-match)");
+  const none = focusClimb(db4, r.id, other, 6);
+  check(none.whole && none.nomatch, "nothing fits the filter: whole climb, flagged as no match");
 }
 
 console.log(fails ? `${fails} failures` : "all engine checks pass");

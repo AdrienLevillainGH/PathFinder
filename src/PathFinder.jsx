@@ -52,6 +52,16 @@ function fitQuery(q, db) {
   return Object.keys(fix).length ? { ...q, ...fix } : q;
 }
 const today = () => new Date().toISOString().slice(0, 10);
+// saved segments: one entry per stretch ("<climb>@<dir>:<i>-<j>"), or per
+// whole climb ("<climb>"), with its numbers so the list needs no data
+const favKey = (r) => (r.whole ? r.id : `${r.id}@${r.dir}:${r.i}-${r.j}`);
+const snapshot = (r) => ({ climb: r.id, dir: r.dir, i: r.whole ? null : r.i, j: r.whole ? null : r.j, whole: Boolean(r.whole),
+                           up: Math.round(r.up), len: Math.round(r.len), grade: Math.round(r.grade * 1000) / 1000 });
+const savedList = (store) => Object.fromEntries(Object.entries(store.favourites).map(([k, f]) => [k, { climb: k.split("@")[0], whole: f.i == null, ...f }]));
+// "313 m D+ · 2.0 km · 16 %": the three numbers of a segment
+const statLine = (f) => `${Math.round(f.up)} m ${f.dir === "down" ? "D−" : "D+"} · ${fmtKm(f.len)} · ${fmtPct(f.grade)}`;
+// older saved entries have no numbers: the whole climb's
+const climbStats = (c) => ({ dir: "up", up: c.dplus, len: c.len, grade: (c.dplus - c.dminus) / c.len, whole: true });
 // the transport choices this data has (older data: train + coach only)
 const transitChoices = (db) => TRANSIT.filter((t) => t.id === "all" || (db.meta.modes || []).includes(t.id));
 // "≤ 60 min", "≤ 60 min by train", "≤ 60 min by coach"
@@ -118,17 +128,25 @@ export default function PathFinder() {
     else set({ mode, gain: Math.max(25, Math.round(implied(q).gain / 10) * 10) });
   };
 
-  // personal data, stamped like DayLoad's so the GitHub sync can take it later
-  const toggleFav = (id) => setStore((s) => {
+  // personal data, stamped like DayLoad's so the GitHub sync can take it later.
+  // Saved = the segment itself: which stretch of which climb, and its numbers
+  // (older entries keyed by climb id alone are whole climbs)
+  const toggleFav = (r) => setStore((s) => {
+    const key = favKey(r);
     const favourites = { ...s.favourites };
-    if (favourites[id]) {
-      delete favourites[id];
-      return { ...s, favourites, graveyard: [...s.graveyard, { id: `fav:${id}`, deletedAt: nowISO() }] };
+    if (favourites[key]) {
+      delete favourites[key];
+      return { ...s, favourites, graveyard: [...s.graveyard, { id: `fav:${key}`, deletedAt: nowISO() }] };
     }
-    favourites[id] = { updatedAt: nowISO() };
+    favourites[key] = { ...snapshot(r), updatedAt: nowISO() };
     return { ...s, favourites };
   });
-  const markDone = (id) => setStore((s) => ({ ...s, done: [...s.done, { id: uid(), climbId: id, date: today(), updatedAt: nowISO() }] }));
+  const unfav = (key) => setStore((s) => {
+    const favourites = { ...s.favourites };
+    delete favourites[key];
+    return { ...s, favourites, graveyard: [...s.graveyard, { id: `fav:${key}`, deletedAt: nowISO() }] };
+  });
+  const markDone = (r) => setStore((s) => ({ ...s, done: [...s.done, { id: uid(), climbId: r.id, ...snapshot(r), date: today(), updatedAt: nowISO() }] }));
   const removeDone = (doneId) => setStore((s) => ({ ...s, done: s.done.filter((d) => d.id !== doneId),
     graveyard: [...s.graveyard, { id: `done:${doneId}`, deletedAt: nowISO() }] }));
   const savePreset = (name) => setStore((s) => ({ ...s, presets: [...s.presets, { id: uid(), name, query: q, updatedAt: nowISO() }] }));
@@ -136,15 +154,23 @@ export default function PathFinder() {
     graveyard: [...s.graveyard, { id: `preset:${pid}`, deletedAt: nowISO() }] }));
   const setSetting = (k, v) => setStore((s) => ({ ...s, settings: { ...s.settings, [k]: v } }));
   const setLayers = (v) => setSetting("map", v);
-  const openClimb = async (id) => {
+  // a result opens as the segment it is; the page can switch to the whole climb and back
+  const openResult = (r) => setOpen({ ...r, base: { dir: r.dir, i: r.i, j: r.j } });
+  // a saved segment (or a done one) opens exactly as it was saved
+  const openSaved = async (id, f = {}) => {
+    const st = f.i != null ? { dir: f.dir, i: f.i, j: f.j } : f.whole ? { dir: f.dir, whole: true } : null;
     await Promise.all([ensureClimbs(state.db, [id]), ensureHub(state.db, q.origin, q.transit)]).catch(() => {});
-    const r = focusClimb(state.db, id, q, pace);
-    if (r) setOpen(r);
+    const r = focusClimb(state.db, id, q, pace, st);
+    if (r) setOpen({ ...r, base: st?.i != null ? st : null });
   };
+  const viewOpen = (mode) => setOpen((o) => {
+    const r = focusClimb(state.db, o.id, q, pace, mode === "whole" ? { dir: o.dir, whole: true } : o.base);
+    return r ? { ...r, base: o.base } : o;
+  });
   // saved climbs may sit in areas not loaded yet
   useEffect(() => {
     if (state.status !== "ready" || page !== "saved") return;
-    const ids = [...Object.keys(store.favourites), ...store.done.map((d) => d.climbId)];
+    const ids = [...Object.values(savedList(store)).map((f) => f.climb), ...store.done.map((d) => d.climbId)];
     ensureClimbs(state.db, ids).then(() => setTick((t) => t + 1)).catch(() => {});
   }, [state, page, store.favourites, store.done]);
 
@@ -175,11 +201,11 @@ export default function PathFinder() {
         )}
         {state.status === "ready" && page === "explore" && (
           <Explore db={db} q={q} set={set} run={run} fetching={fetching} store={store} selected={selected} setSelected={setSelected}
-            onOpen={setOpen} openSheet={setSheet} goHow={() => setPage("how")} theme={theme} basemap={basemap} layers={layers} setLayers={setLayers} />
+            onOpen={openResult} openSheet={setSheet} goHow={() => setPage("how")} theme={theme} basemap={basemap} layers={layers} setLayers={setLayers} />
         )}
         {state.status === "ready" && page === "saved" && (
           <div className="absolute inset-0 overflow-y-auto">
-            <Saved db={db} q={q} pace={pace} store={store} onOpenClimb={openClimb} onRemoveDone={removeDone} onUnfav={toggleFav}
+            <Saved db={db} q={q} pace={pace} store={store} onOpenSaved={openSaved} onRemoveDone={removeDone} onUnfav={unfav}
               onApply={(p) => { setQ({ ...DEFAULT_QUERY, ...p.query }); setPage("explore"); }} onDeletePreset={deletePreset}
               onSettings={() => setSheet("settings")} />
           </div>
@@ -206,9 +232,9 @@ export default function PathFinder() {
 
       {open && (
         <Segment r={open} db={db} q={q} pace={pace} theme={theme} basemap={basemap} layers={layers}
-          fav={Boolean(store.favourites[open.id])}
+          fav={Boolean(store.favourites[favKey(open)])} onView={open.base ? viewOpen : null}
           doneDates={store.done.filter((d) => d.climbId === open.id).map((d) => d.date)}
-          onFav={() => toggleFav(open.id)} onDone={() => markDone(open.id)} onClose={() => setOpen(null)} />
+          onFav={() => toggleFav(open)} onDone={() => markDone(open)} onClose={() => setOpen(null)} />
       )}
       {sheet === "filters" && <Filters db={db} q={q} set={set} setMode={setMode} run={run} onSavePreset={savePreset} onClose={() => setSheet(null)}
         onOrigin={() => setSheet("origin")} onReset={() => setQ({ ...DEFAULT_QUERY, origin: q.origin, window: q.window })} />}
@@ -390,7 +416,7 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
           style={{ scrollSnapType: "x mandatory", scrollPaddingLeft: 12 }}>
           {run.results.map((r) => (
             <div key={r.id} data-id={r.id} style={{ scrollSnapAlign: "start" }} className="shrink-0">
-              <Card r={r} on={r.id === selected} fav={Boolean(store.favourites[r.id])} done={store.done.some((d) => d.climbId === r.id)}
+              <Card r={r} on={r.id === selected} fav={Boolean(store.favourites[favKey(r)] || store.favourites[r.id])} done={store.done.some((d) => d.climbId === r.id)}
                 onClick={() => (r.id === selected ? onOpen(r) : setSelected(r.id))} width={292} compact />
             </div>
           ))}
@@ -406,7 +432,7 @@ function ResultsSheet({ run, fetching, q, set, store, state, setState, selected,
             </div>
             <div className="mt-3 space-y-3">
               {run.results.map((r) => (
-                <Card key={r.id} r={r} on={r.id === selected} fav={Boolean(store.favourites[r.id])} done={store.done.some((d) => d.climbId === r.id)}
+                <Card key={r.id} r={r} on={r.id === selected} fav={Boolean(store.favourites[favKey(r)] || store.favourites[r.id])} done={store.done.some((d) => d.climbId === r.id)}
                   onClick={() => onOpen(r)} />
               ))}
             </div>
@@ -748,8 +774,11 @@ function OriginPicker({ db, q, onPick, onClose }) {
 /* Saved                                                              */
 /* ================================================================== */
 
-function Saved({ db, q, pace, store, onOpenClimb, onRemoveDone, onUnfav, onApply, onDeletePreset, onSettings }) {
-  const favs = Object.keys(store.favourites).map((id) => db.climbById[id]).filter(Boolean);
+function Saved({ db, q, pace, store, onOpenSaved, onRemoveDone, onUnfav, onApply, onDeletePreset, onSettings }) {
+  const favs = Object.entries(savedList(store))
+    .map(([key, f]) => ({ key, f, c: db.climbById[f.climb] }))
+    .filter((x) => x.c)
+    .sort((a, b) => (b.f.updatedAt || "").localeCompare(a.f.updatedAt || ""));
   const done = [...store.done].sort((a, b) => b.date.localeCompare(a.date));
   return (
     <div className="mx-auto max-w-2xl px-4 pb-10">
@@ -761,9 +790,11 @@ function Saved({ db, q, pace, store, onOpenClimb, onRemoveDone, onUnfav, onApply
       <Group title={`Segments · ${favs.length}`}>
         {favs.length ? (
           <div className="space-y-3">
-            {favs.map((c) => (
-              <ListRow key={c.id} title={c.name} sub={`whole climb ${c.dplus} m D+ · ${fmtKm(c.len)}`} onOpen={() => onOpenClimb(c.id)} onDelete={() => onUnfav(c.id)} />
-            ))}
+            {favs.map(({ key, f, c }) => {
+              const st = f.up != null ? f : climbStats(c);
+              return <ListRow key={key} title={c.name} sub={`${statLine(st)}${st.whole ? " · whole climb" : ""}`}
+                onOpen={() => onOpenSaved(c.id, f)} onDelete={() => onUnfav(key)} />;
+            })}
           </div>
         ) : <Empty>Tap Save on a segment to keep it here.</Empty>}
       </Group>
@@ -773,7 +804,7 @@ function Saved({ db, q, pace, store, onOpenClimb, onRemoveDone, onUnfav, onApply
           <div className="space-y-3">
             {done.map((d) => {
               const c = db.climbById[d.climbId];
-              return c ? <ListRow key={d.id} title={c.name} sub={d.date} onOpen={() => onOpenClimb(c.id)} onDelete={() => onRemoveDone(d.id)} /> : null;
+              return c ? <ListRow key={d.id} title={c.name} sub={d.up != null ? `${d.date} · ${statLine(d)}` : d.date} onOpen={() => onOpenSaved(c.id, d)} onDelete={() => onRemoveDone(d.id)} /> : null;
             })}
           </div>
         ) : <Empty>The ✓ on a segment logs the date here. Later: a link to the DayLoad session.</Empty>}

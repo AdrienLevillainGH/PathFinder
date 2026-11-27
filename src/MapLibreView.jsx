@@ -246,12 +246,45 @@ export default function MapLibreView({ db, run, q, theme, selected, onSelect, pa
 }
 
 /* the small map on the segment page: the stretch coloured by grade, its station */
-export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height = 300 }) {
+// 3D relief: Mapterhorn's open terrain tiles (terrarium encoding, 512 px),
+// read from its PMTiles archives: zoom <= 12 from the planet file, deeper
+// zooms from one regional file per zoom-6 tile. Loaded on first use only.
+const MAPTERHORN = "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/mapterhorn/mapterhorn/";
+let demReady = null;
+function demProtocol() {
+  if (!demReady) demReady = import("pmtiles").then(({ Protocol }) => {
+    const protocol = new Protocol();
+    maplibregl.addProtocol("mapterhorn", async (params, abort) => {
+      const [z, x, y] = params.url.replace("mapterhorn://", "").split("/").map(Number);
+      const name = z <= 12 ? "planet" : `6-${x >> (z - 6)}-${y >> (z - 6)}`;
+      const res = await protocol.tile({ ...params, url: `pmtiles://${MAPTERHORN}${name}.pmtiles/${z}/${x}/${y}.webp` }, abort);
+      if (res.data == null) throw new Error(`no terrain tile ${z}/${x}/${y}`);
+      return res;
+    });
+  });
+  return demReady;
+}
+
+// compass direction from a to b ([lon, lat]), degrees
+function bearingOf(a, b) {
+  const k = Math.PI / 180;
+  const y = Math.sin((b[0] - a[0]) * k) * Math.cos(b[1] * k);
+  const x = Math.cos(a[1] * k) * Math.sin(b[1] * k) - Math.sin(a[1] * k) * Math.cos(b[1] * k) * Math.cos((b[0] - a[0]) * k);
+  return (Math.atan2(y, x) / k + 360) % 360;
+}
+
+export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height = 300, full = false, threeD = false, onTap = null }) {
   const box = useRef(null);
   const mapRef = useRef(null);
   const pins = useRef([]);
   const apprRef = useRef(approach);
   apprRef.current = approach;
+  const tapRef = useRef(null);
+  tapRef.current = full ? null : onTap;
+  const fullRef = useRef(full);
+  fullRef.current = full;
+  const threeRef = useRef(threeD);
+  threeRef.current = threeD;
   const walkData = (a) => fc(a ? [line(a.coords, { real: a.real ? 1 : 0 })] : []);
   useEffect(() => {
     const { coords, z } = along(r.climb, r.dir);
@@ -298,9 +331,52 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     };
     map.on("style.load", init);
     map.on("load", init);
+    // a tap (not a drag) on the small map opens it full screen
+    map.on("click", () => tapRef.current?.());
     mapRef.current = map;
     return () => { mapRef.current = null; map.remove(); };
   }, [r.id, r.i, r.j, r.dir]);
+
+  // follow the box when it grows to the whole screen and back
+  useEffect(() => {
+    const ro = new ResizeObserver(() => mapRef.current?.resize());
+    if (box.current) ro.observe(box.current);
+    return () => ro.disconnect();
+  }, []);
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getSource("seg")) return;
+    map.resize();
+    if (!threeRef.current) frame(map, true);
+  }, [full]);
+
+  // relief in 3D: terrain on, tilted, looking along the segment (uphill for a climb)
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    let gone = false;
+    const handlers = [map.dragRotate, map.touchPitch];
+    if (threeD) {
+      demProtocol().then(() => {
+        if (gone || mapRef.current !== map) return;
+        const go = () => {
+          if (!map.getSource("dem")) map.addSource("dem", { type: "raster-dem", tiles: ["mapterhorn://{z}/{x}/{y}"], encoding: "terrarium", tileSize: 512, maxzoom: 14 });
+          map.setTerrain({ source: "dem", exaggeration: 1.3 });
+          handlers.forEach((h) => h.enable());
+          map.touchZoomRotate.enableRotation();
+          frame(map, true);
+        };
+        if (map.isStyleLoaded()) go(); else map.once("load", go);
+      }).catch(() => {});
+    } else if (map.getTerrain?.()) {
+      map.setTerrain(null);
+      handlers.forEach((h) => h.disable());
+      map.touchZoomRotate.disableRotation();
+      map.easeTo({ pitch: 0, bearing: 0, duration: 400 });
+      setTimeout(() => mapRef.current === map && frame(map, true), 420);
+    }
+    return () => { gone = true; };
+  }, [threeD]);
 
   // the stretch, its stop and the walk between them
   const frame = (map, animate) => {
@@ -310,7 +386,14 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
     const s = db.byId[r.station];
     if (s) b.extend([s.lon, s.lat]);
     apprRef.current?.coords.forEach((c) => b.extend(c));
-    map.fitBounds(b, { padding: { top: 80, bottom: 50, left: 40, right: 40 }, maxZoom: 15.5, duration: animate ? 500 : 0 });
+    const padding = fullRef.current ? { top: 90, bottom: 110, left: 40, right: 40 } : { top: 80, bottom: 50, left: 40, right: 40 };
+    if (threeRef.current) {
+      const bearing = bearingOf(coords[r.i], coords[r.j]);
+      const cam = map.cameraForBounds(b, { padding, bearing, maxZoom: 15 });
+      if (cam) map.easeTo({ ...cam, zoom: cam.zoom - 0.4, bearing, pitch: 60, duration: animate ? 900 : 0 });
+      return;
+    }
+    map.fitBounds(b, { padding, maxZoom: 15.5, duration: animate ? 500 : 0 });
   };
 
   // the walking route and the exact line arrive after the page opens
@@ -329,7 +412,7 @@ export function DetailMapGL({ r, db, layers, theme, gradeColor, approach, height
   return (
     <div className="absolute inset-0">
       <div ref={box} style={{ position: "absolute", top: 0, left: 0, right: 0, height, background: "#EBEDDA" }} />
-      <div className="pointer-events-none absolute bottom-8 left-3 text-[10px]" style={{ color: "#1B1A16", textShadow: "0 0 3px #fff,0 0 3px #fff" }}>{credits(layers)}</div>
+      <div className="pointer-events-none absolute left-3 text-[10px]" style={{ bottom: full ? 96 : 32, color: "#1B1A16", textShadow: "0 0 3px #fff,0 0 3px #fff" }}>{credits(layers)}{threeD ? " · relief © Mapterhorn" : ""}</div>
     </div>
   );
 }
